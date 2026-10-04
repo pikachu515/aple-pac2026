@@ -40,14 +40,16 @@ PR은 main이 망가져서 네 명이 동시에 멈추는 일을 막기 위한 �
 
 **자기 폴더 위주로 고친다.** 다른 폴더를 고쳐야 하면 담당자에게 먼저 말한다. 같은 파일을 두 사람이 동시에 고치면 충돌이 난다.
 
-| 폴더 | 담당 |
-|---|---|
-| `aple/perception/`, `aple/hal/calibration.py` | 역할 A |
-| `aple/inspection/` | 역할 C |
-| `aple/execution/`, `aple/planning/`, `aple/hal/piper_studio.py` | 역할 B |
-| `hardware/`, `configs/size_bins.yaml` | 역할 D |
-| `aple/orchestration/` | 통합 담당 |
-| `aple/schema.py` | **전원 합의 후에만** |
+| 폴더 | 담당 | GitHub |
+|---|---|---|
+| `aple/perception/`, `aple/hal/calibration.py`, `configs/` 카메라·인식·작업셀 | 역할 A | lsb1017 |
+| `aple/execution/`, `aple/planning/`, `aple/hal/piper_studio.py`, `configs/` 실행·안전 | 역할 B | dbrua3311 |
+| `aple/inspection/`, `configs/varieties.yaml` | 역할 C | pikachu515 |
+| `hardware/`, `configs/size_bins.yaml` | 역할 D | uhdahmrok |
+| `aple/orchestration/` | 통합 (전원) | — |
+| `aple/schema.py` | **전원 합의 후에만** | — |
+
+PR을 올리면 **바꾼 폴더의 담당자가 자동으로 리뷰어로 지정된다** (본인 제외). 담당이 바뀌면 `tools/request_reviewers.py` 의 표를 고친다.
 
 **`aple/schema.py` 를 고쳤으면** `python tools/gen_interfaces.py` 로 다이어그램을 다시 만들어 같이 올린다. (main 에 합쳐지면 GitHub가 자동으로 다시 만들어 주지만, PR 단계에서는 직접 해야 테스트가 통과한다.)
 
@@ -62,7 +64,7 @@ PR은 main이 망가져서 네 명이 동시에 멈추는 일을 막기 위한 �
 | 구독 | 도구 | 설치 · 실행 (Ubuntu) |
 |---|---|---|
 | Claude Pro / Max | **Claude Code** | `curl -fsSL https://claude.ai/install.sh \| bash` → 저장소 폴더에서 `claude` → Claude 계정 로그인 |
-| ChatGPT Plus / Pro | **Codex CLI** | `npm install -g @openai/codex` → 저장소 폴더에서 `codex` → ChatGPT 계정 로그인 |
+| ChatGPT Plus / Pro | **Codex** | VS Code 확장(Ubuntu VS Code에서 사용 가능) 또는 CLI `npm install -g @openai/codex` → 저장소 폴더에서 `codex` → ChatGPT 계정 로그인 |
 | 대화창만 쓸 때 | ChatGPT · Claude 웹 | 아래 말투로 물어보고, 알려 준 명령을 직접 실행 |
 
 설치 명령은 바뀔 수 있으므로 안 되면 각 도구의 공식 안내를 확인한다. 두 도구 모두 VS Code 확장으로도 쓸 수 있다.

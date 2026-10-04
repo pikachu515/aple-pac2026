@@ -1,0 +1,5 @@
+# 인식 (설계서 9.3 perception.yaml) — 역할 A
+perception:
+  tracker: {match_radius_m: 0.03}
+  sphere_fit: {ransac_threshold_m: 0.003, max_fit_residual_m: null}
+  depth: {min_valid_ratio: 0.4}   # 미달 시 G1, 구 피팅 보완

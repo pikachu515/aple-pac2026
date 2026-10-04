@@ -1,0 +1,18 @@
+# 품종·판정 (설계서 9.3 varieties.yaml) — 역할 C
+# coloring_threshold 는 농산물 표준규격 1011 '상' 기준. hue_range·min_chroma 는 현장 표본으로 확정.
+varieties:
+  fuji:   {coloring_threshold: 0.4, delta_up: null, delta_mid: null, hue_range_deg: null, min_chroma: null}
+  hongro: {coloring_threshold: 0.5, delta_up: null, delta_mid: null, hue_range_deg: null, min_chroma: null}
+inspection:
+  default_variety: fuji
+  policy: NEVER                 # NEVER(모드 A) | ALWAYS(모드 B) | ADAPTIVE
+  judge_camera: top             # 판정은 D435 탑뷰만 (전략 S5-4)
+  cos_theta_min: 0.5
+  min_coverage: null
+  max_view_disagreement: null
+  min_confidence: null
+  views:                        # 모드 B: 툴 수평(약 90°) 후 J6 90° x4 → 커버리지 약 0.9
+    tilt_rad: 1.5708
+    rotation_angles_rad: [0.0, 1.5708, 3.1416, 4.7124]
+    settle_time_s: 0.3
+  reuse: {max_displacement_m: 0.005}

@@ -1,8 +1,0 @@
-# 크기 구간별 파지 파라미터 (S8-5, S8-6) — 역할 D 실측, 역할 B 적용
-# effort 는 GripperCtrl 토크 설정 (0~5000). 아래는 가정값이며 FSR 보정 후 교체한다.
-bins:
-  - {name: S,  max_diameter_mm: 65, open_width_mm: null, grasp_height_mm: null, effort: 220}
-  - {name: M,  max_diameter_mm: 75, open_width_mm: null, grasp_height_mm: null, effort: 350}
-  - {name: L,  max_diameter_mm: 85, open_width_mm: null, grasp_height_mm: null, effort: 520}
-  - {name: XL, max_diameter_mm: 95, open_width_mm: null, grasp_height_mm: null, effort: 750}
-oversize_reject_mm: 100   # 어댑터 장착 시 유효 파지 상한 (S1-4)

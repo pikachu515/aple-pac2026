@@ -1,8 +1,0 @@
-# 작업대 배치 (S1, S7) — 역할 A 측정
-T_robot_cam: null         # 4x4 카메라→로봇 변환 행렬 (mm)
-tray_roi_px: null         # [x1, y1, x2, y2] top 영상
-boxes:
-  high:   {roi_px: null, grid: [2, 3]}
-  mid:    {roi_px: null, grid: [2, 3]}
-  reject: {roi_px: null, grid: [1, 2]}
-park_pose: null           # 스냅샷 시 팔 위치 (작업 영역 밖)

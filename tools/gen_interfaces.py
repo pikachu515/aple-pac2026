@@ -51,10 +51,13 @@ def build() -> str:
     names = {c.__name__ for c in dcs + ens}
 
     flow = ["flowchart LR"]
-    for key, label in schema.ROLES.items():
+    for key, label in schema.MODULES.items():
         flow.append(f'    {key}["{label}"]')
+    merged: dict[tuple[str, str], list[str]] = {}
     for src, dst, cls in schema.FLOWS:
-        flow.append(f"    {src} -->|{cls.__name__}| {dst}")
+        merged.setdefault((src, dst), []).append(cls.__name__)
+    for (src, dst), labels in merged.items():
+        flow.append(f'    {src} -->|"{", ".join(labels)}"| {dst}')
 
     cd = ["classDiagram", "    direction LR"]
     rels = []
@@ -73,8 +76,8 @@ def build() -> str:
         cd.append("    }")
     cd += rels
 
-    table = ["| 보내는 역할 | 받는 역할 | 데이터 | 필드 |", "|---|---|---|---|"]
-    plain = {k: v.replace("<br/>", " · ") for k, v in schema.ROLES.items()}
+    table = ["| 보내는 모듈 | 받는 모듈 | 데이터 | 필드 |", "|---|---|---|---|"]
+    plain = {k: v.replace("<br/>", " · ") for k, v in schema.MODULES.items()}
     for src, dst, cls in schema.FLOWS:
         fields = ", ".join(f"`{f.name}`" for f in dataclasses.fields(cls))
         table.append(f"| {plain[src]} | {plain[dst]} | `{cls.__name__}` | {fields} |")

@@ -1,0 +1,16 @@
+# 작업 셀 (설계서 9.3 workcell.yaml) — 역할 A 측정
+# null 은 현장 실측 후 채운다.
+workcell:
+  expected_apple_count: 5
+  frames: {base: base_link, camera: camera_top_optical_frame, tcp: tcp}
+  T_base_camera: null           # 4x4, eye-to-hand 캘리브레이션 결과 (m)
+  tcp_offset_m: null            # 핑거 어댑터 반영
+  tray:
+    size_m: [0.3, 0.2]
+    wall_height_m: 0.03
+  boxes:                        # 등급 번호 = 상자 번호 (UPPER=0, MIDDLE=1, REJECT=2)
+    UPPER:  {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08}
+    MIDDLE: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08}
+    REJECT: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08}
+  placement: {max_drop_m: 0.03, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near}
+  poses: {home_joint_rad: null, scan_joint_rad: null}

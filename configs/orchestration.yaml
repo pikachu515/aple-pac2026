@@ -1,0 +1,8 @@
+# 공정 관리 (설계서 9.3 orchestration.yaml) — 통합 담당
+orchestration:
+  max_rescan: 3
+  max_retry: 2
+  grade_wait_timeout_s: 10.0
+  verify_timeout_s: 5.0
+  pipelining: {enabled: false}
+  logging: {csv_dir: logs/}

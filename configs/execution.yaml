@@ -1,0 +1,6 @@
+# 실행 (설계서 9.3 execution.yaml) — 역할 B
+execution:
+  default_backend: scripted     # scripted | act — 2일차 04:00 성공률 비교 후 결정
+  act: {task_text: "Pick the apple and place it in the box", timeout_s: 30.0}
+  soft_landing: {final_descent_m: 0.03, slow_speed_scale: 0.1}
+  gripper: {close_speed: null, slip_width_m: 0.002}

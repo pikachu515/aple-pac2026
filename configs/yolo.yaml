@@ -1,0 +1,2 @@
+# 검출 (설계서 9.3 yolo.yaml) — 역할 A
+yolo: {weights: null, task: detect, imgsz: 640, conf: 0.4, iou: 0.5, device: 'cuda:0', mask_erode_px: 2}

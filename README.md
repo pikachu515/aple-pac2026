@@ -3,7 +3,7 @@
 사과 착색 등급 판정 및 등급별 적재 시스템 (WeGo PIPER + Piper Studio)
 
 > 논리 설계는 팀 Notion 「아키텍처 및 노드 설계」, 대회 운영 기준은 **전략 종합** 문서를 따른다. 이 저장소는 코드와 설정만 관리한다.
-> 설계서 노드 ↔ 코드 대응과 대회용 조정 사항은 **[docs/architecture.md](docs/architecture.md)** 에 있다.
+> 대회 조건에 맞춘 **설계 결정과 그 이유·검토 과정**, 설계서 노드 ↔ 코드 대응은 **[docs/architecture.md](docs/architecture.md)** 에 있다.
 
 ## 시스템 구조
 

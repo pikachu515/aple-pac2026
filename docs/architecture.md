@@ -134,7 +134,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 |---|---|---|
 | piper_driver, command_gate | Piper Studio 로봇 데몬 (`hal/piper_studio.py`) | 대체 |
 | camera_top | Piper Studio rsd (`hal/piper_studio.py` `snapshot`) | 대체 |
-| camera_color_setup, color_normalizer, lighting_monitor | Piper Studio 회색 카드 보정 · 조명 감시 | 대체 |
+| camera_color_setup, color_normalizer, lighting_monitor | Piper Studio 회색 카드 보정 · 조명 감시 (Piper Studio 밖 실험용: `inspection/color.py`) | 대체 — ✅ 소프트웨어판 구현·검증 |
 | calibration_node | `hal/calibration.py` | 필수 |
 | workcell_config_server | `configs/*.yaml` | 필수 |
 | scene_capture_server | `hal/piper_studio.py` `snapshot` | 필수 |
@@ -142,9 +142,9 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | apple_pose_estimator, apple_tracker | `perception/pose_estimator.py` | 필수 (tracker 단순형) |
 | box_occupancy_estimator | `perception/box_occupancy.py` `estimate` | 필수 |
 | placement_verifier | `perception/box_occupancy.py` `verify_placement` | 확장 |
-| apple_crop_extractor, color_segmentation_node, surface_area_corrector | `inspection/coloration.py` `color_ratio` | 필수 |
-| surface_map_accumulator | `inspection/coloration.py` `accumulate_views` | 확장 (모드 B) |
-| grade_classifier | `inspection/grade_classifier.py` | 필수 |
+| apple_crop_extractor, color_segmentation_node, surface_area_corrector | `inspection/coloration.py` `color_ratio` | 필수 — ✅ 구현·검증 |
+| surface_map_accumulator | `inspection/coloration.py` `accumulate_views` | 확장 (모드 B) — ✅ 구현·검증 |
+| grade_classifier | `inspection/grade_classifier.py` | 필수 — ✅ 구현·검증 |
 | top_view_estimator | 탑뷰–전표면 오차를 실측해 `ratio_lo/hi` 폭으로 사용 | 대회 후 (학습형 모델) |
 | grasp_profile_selector | `planning/grasp_profile.py` | 필수 |
 | task_planner | `planning/task_planner.py` | 필수 (단순형) |

@@ -86,6 +86,7 @@ AI 코딩 도구는 저장소의 `AGENTS.md`(Codex) · `CLAUDE.md`(Claude Code)�
 ```bash
 python tools/rs_check.py          # D435 연결 · USB 3 협상 · 스트림 · 깊이 유효율
 python tools/capture_snapshot.py --out data/snapshots/<날짜_장소>   # 개발용 스냅샷 저장
+python tools/color_session.py analyze data/snapshots/<날짜_장소>  # 착색비율·등급 (역할 C, docs/inspection_bench.md)
 ```
 
 Piper Studio가 D435를 사용 중이면 장치가 점유되어 열리지 않는다. 점검은 Piper Studio 카메라 데몬을 멈춘 상태에서 수행한다.

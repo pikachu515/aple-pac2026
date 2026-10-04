@@ -54,6 +54,7 @@ M4 공정 관리        상태 기계 · 예외 처리 · 사이클 기록      
 **브랜치**
 - `main` 은 항상 실행 가능한 상태로 유지한다
 - 작업은 `역할/주제` 브랜치에서 한다 — 예: `perception/sphere-fit`, `inspection/hue-angle`
+- 대회 전에는 PR로 올리고, **자동 테스트가 초록 체크(✓)면 본인이 바로 Merge** 해도 된다
 - `aple/schema.py` 를 바꾸는 변경은 Pull Request로 올리고 관련 역할의 확인을 받는다
 - `schema.py` 를 고친 뒤 `python tools/gen_interfaces.py` 로 다이어그램을 다시 만들어 함께 커밋한다 (다이어그램 직접 수정 금지)
 - 대회 중에는 시간 관계상 `main` 직접 커밋을 허용하되, 커밋 전에 `pytest` 를 통과시킨다
@@ -76,7 +77,9 @@ pytest
 
 ## 처음 오셨다면
 
-**[docs/git_guide.md](docs/git_guide.md)** — 설치, 매일 작업 순서, 로봇 없이 개발하는 방법, 자주 생기는 문제
+**[docs/git_guide.md](docs/git_guide.md)** — 설치, PR 규칙, AI 코딩 도구(Claude Code · Codex)로 작업하는 법, 로봇 없이 개발하는 방법, 자주 생기는 문제
+
+AI 코딩 도구는 저장소의 `AGENTS.md`(Codex) · `CLAUDE.md`(Claude Code)를 자동으로 읽어 팀 규칙을 따른다.
 
 ## 장비 점검
 

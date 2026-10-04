@@ -74,10 +74,15 @@ pip install -r requirements.txt
 pytest
 ```
 
+## 처음 오셨다면
+
+**[docs/git_guide.md](docs/git_guide.md)** — 설치, 매일 작업 순서, 로봇 없이 개발하는 방법, 자주 생기는 문제
+
 ## 장비 점검
 
 ```bash
 python tools/rs_check.py          # D435 연결 · USB 3 협상 · 스트림 · 깊이 유효율
+python tools/capture_snapshot.py --out data/snapshots/<날짜_장소>   # 개발용 스냅샷 저장
 ```
 
 Piper Studio가 D435를 사용 중이면 장치가 점유되어 열리지 않는다. 점검은 Piper Studio 카메라 데몬을 멈춘 상태에서 수행한다.

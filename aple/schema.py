@@ -123,3 +123,25 @@ class CycleLog:
         d = asdict(self)
         d["fail_code"] = self.fail_code.value
         return d
+
+
+# ---------------------------------------------------------------- 역할 간 데이터 흐름
+# docs/interfaces.md 의 다이어그램은 이 표와 위 클래스들로부터 자동 생성된다.
+# 흐름을 바꾸려면 다이어그램이 아니라 이 표를 고친다.
+
+ROLES = {
+    "A": "역할 A<br/>비전 타깃 인식 · 3D 위치",
+    "C": "역할 C<br/>다면 촬영 · 색상 품질 판별",
+    "D": "역할 D<br/>하드웨어 고도화",
+    "B": "역할 B<br/>로봇 파지 · 손상 방지 제어",
+    "S": "공동<br/>오케스트레이터 · 평가",
+}
+
+FLOWS = [
+    ("A", "C", AppleObservation),
+    ("A", "B", AppleGeometry),
+    ("A", "B", BoxState),
+    ("C", "B", GradeResult),
+    ("D", "B", GraspParams),
+    ("B", "S", CycleLog),
+]

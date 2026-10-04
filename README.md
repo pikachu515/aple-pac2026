@@ -28,6 +28,7 @@
 | 경로 | 담당 | 내용 |
 |---|---|---|
 | `aple/schema.py` | 공동 | **모듈 간 데이터 계약** — 변경 시 전원 합의 |
+| `docs/interfaces.md` | 자동 생성 | 데이터 계약 다이어그램 — **[보기](docs/interfaces.md)** |
 | `aple/vision/` | 역할 A | 검출, 깊이 기하 측정, 카메라–로봇 변환, 점유 격자 |
 | `aple/grading/` | 역할 C | 색 기준 정규화, 착색비율, 다뷰 합산, 등급·리젝트 |
 | `aple/control/` | 역할 B | 크기 구간 파라미터 적용, 태스크 문장, 그리퍼 토크 |
@@ -51,6 +52,7 @@
 - `main` 은 항상 실행 가능한 상태로 유지한다
 - 작업은 `역할/주제` 브랜치에서 한다 — 예: `vision/depth-diameter`, `grading/hue-angle`
 - `aple/schema.py` 를 바꾸는 변경은 Pull Request로 올리고 관련 역할의 확인을 받는다
+- `schema.py` 를 고친 뒤 `python tools/gen_interfaces.py` 로 다이어그램을 다시 만들어 함께 커밋한다 (다이어그램 직접 수정 금지)
 - 대회 중에는 시간 관계상 `main` 직접 커밋을 허용하되, 커밋 전에 `pytest` 를 통과시킨다
 
 **올리지 않는 것**

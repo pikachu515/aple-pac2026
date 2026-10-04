@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# 비밀 정보
+.env
+*.key
+secrets*
+
+# 데이터 · 모델 (공유 드라이브에 둔다)
+data/*
+!data/README.md
+runs/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bag
+*.mp4
+*.avi
+*.zip
+
+# 편집기 · OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 개인 문서
+*.hwp

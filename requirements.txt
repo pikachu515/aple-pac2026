@@ -1,0 +1,7 @@
+# 대회 전 버전을 확정해 == 로 고정한다 (S14-1)
+numpy
+opencv-python
+pyyaml
+pyrealsense2
+ultralytics
+pytest

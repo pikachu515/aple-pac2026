@@ -1,17 +1,32 @@
 # 품종·판정 (설계서 9.3 varieties.yaml) — 역할 C
-# coloring_threshold 는 농산물 표준규격 1011 '상' 기준. hue_range·min_chroma 는 현장 표본으로 확정.
+# coloring_threshold 는 농산물 표준규격 1011 '상' 기준.
+# [임시] 표시 값은 사과 표본 실측 전 초기값이다. tools/color_session.py suggest / truth 결과로 교체한다.
 varieties:
-  fuji:   {coloring_threshold: 0.4, delta_up: null, delta_mid: null, hue_range_deg: null, min_chroma: null}
-  hongro: {coloring_threshold: 0.5, delta_up: null, delta_mid: null, hue_range_deg: null, min_chroma: null}
+  fuji:
+    coloring_threshold: 0.4
+    delta_up: 0.05                # [임시] '상' 판정 여유 — 리젝트 곡선으로 조정
+    delta_mid: 0.0                # [임시]
+    hue_range_deg: [-40, 55]      # [임시] 착색 색상각 범위 (0 = 적색, 90 = 황색). suggest 로 확정
+    min_chroma: 15                # [임시] 무채색(그림자·반사) 제외
+  hongro:
+    coloring_threshold: 0.5
+    delta_up: 0.05
+    delta_mid: 0.0
+    hue_range_deg: [-40, 55]
+    min_chroma: 15
 inspection:
   default_variety: fuji
-  policy: NEVER                 # NEVER(모드 A) | ALWAYS(모드 B) | ADAPTIVE
-  judge_camera: top             # 판정은 D435 탑뷰만 (전략 S5-4)
-  cos_theta_min: 0.5
-  min_coverage: null
-  max_view_disagreement: null
-  min_confidence: null
-  views:                        # 모드 B: 툴 수평(약 90°) 후 J6 90° x4 → 커버리지 약 0.9
+  policy: NEVER                   # NEVER(모드 A) | ALWAYS(모드 B) | ADAPTIVE
+  judge_camera: top               # 판정은 D435 탑뷰만 (전략 S5-4)
+  cos_theta_min: 0.5              # 법선–시선 60° 이내만 판정 (탑뷰 커버리지 ≈ 0.25)
+  mask_erode_px: 2                # 마스크 가장자리 배경 섞임 제거
+  highlight: {min_L: 90, max_chroma: 12}   # 정반사 하이라이트 제외
+  top_view_error: 0.10            # [임시] 탑뷰 ↔ 전표면 오차 → 판정 구간 폭. truth 로 확정
+  min_coverage: 0.15
+  max_view_disagreement: 0.25     # [임시] 모드 B 뷰 간 편차 한계
+  min_confidence: 0.5
+  surface_map: {bins: 600, margin: 0.02}   # 모드 B 구면 지도 칸 수, 칸 이산화 여유
+  views:                          # 모드 B: 툴 수평(약 90°) 후 J6 90° x4 → 커버리지 약 0.9
     tilt_rad: 1.5708
     rotation_angles_rad: [0.0, 1.5708, 3.1416, 4.7124]
     settle_time_s: 0.3

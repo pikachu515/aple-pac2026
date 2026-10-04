@@ -1,0 +1,5 @@
+# 회색 카드 보정·조명 감시 (설계서 9.3 color.yaml) — 역할 C
+# 현장에서는 Piper Studio 회색 카드 보정·조명 감시를 쓰고, Piper Studio 밖에서 D435를 직접 쓸 때
+# aple/inspection/color.py 가 같은 일을 한다.
+color:
+  gray_card: {target_srgb: 118, delta_e_warn: 2.5, delta_e_fault: 6.0}

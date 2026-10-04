@@ -74,6 +74,10 @@ def main() -> int:
     finally:
         pipe.stop()
 
+    if n == 0:
+        print("[FAIL] 프레임을 받지 못했다 — 케이블 재연결, Piper Studio 카메라 데몬(piper-rsd) 중지 여부 확인")
+        return 1
+
     print(f"스트림   : {args.width}x{args.height} 컬러+깊이, 실측 {fps:.1f} fps (목표 {args.fps})")
     print(f"깊이 유효: 평균 {np.mean(valid) * 100:.1f} % (프레임 전체)")
     if center:

@@ -4,4 +4,5 @@ opencv-python
 pyyaml
 pyrealsense2
 ultralytics
+matplotlib
 pytest

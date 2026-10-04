@@ -37,6 +37,8 @@ git push -u origin inspection/hue-angle    # ⑤ 올리기
 ⑥ GitHub 저장소 화면에 뜨는 **Compare & pull request** 버튼 → 설명 작성 → **Create pull request**
 ⑦ 다른 팀원 1명이 확인하고 **Merge** → 브랜치 삭제
 
+PR을 올리면 GitHub가 자동으로 테스트를 돌린다. PR 화면 아래에 초록 체크(✓)가 뜨면 통과, 빨간 X면 **Details** 를 눌러 실패 내용을 확인하고 고친 뒤 다시 push 한다.
+
 ## 2. 약속
 
 **자기 폴더 위주로 고친다.** 다른 모듈 폴더를 고쳐야 하면 담당자에게 먼저 말한다. 같은 파일을 두 사람이 동시에 고치면 충돌이 난다.
@@ -50,7 +52,7 @@ git push -u origin inspection/hue-angle    # ⑤ 올리기
 | `aple/orchestration/` | 통합 담당 |
 | `aple/schema.py` | **전원 합의 후에만** |
 
-**`aple/schema.py` 를 고쳤으면** 다이어그램을 다시 만들어 같이 올린다.
+**`aple/schema.py` 를 고쳤으면** 다이어그램을 다시 만들어 같이 올린다. (main 에 합쳐지면 GitHub가 자동으로 다시 만들어 주지만, PR 단계에서는 직접 해야 테스트가 통과한다.)
 
 ```bash
 python tools/gen_interfaces.py

@@ -152,3 +152,76 @@ def test_curve_command_writes_graph_and_suggestion(truth, tmp_path, use_labels):
     assert out["chosen"].up_error_rate == pytest.approx(1 / 3)
     assert (root / "_analysis" / "curve.csv").exists()
     assert (root / "_analysis" / "reject_curve.png").exists()
+
+
+def test_rs_check_saves_depth_to_color_calibration(tmp_path, monkeypatch):
+    import sys
+
+    from aple.hal.depth_align import D435Calib
+    from tests import fake_realsense
+    monkeypatch.setitem(sys.modules, "pyrealsense2", fake_realsense)
+    sys.modules.pop("tools.rs_check", None)
+    from tools import rs_check
+    out = tmp_path / "calib" / "d435.json"
+    monkeypatch.setattr(sys, "argv", ["rs_check.py", "--seconds", "0.05", "--save-calib", str(out)])
+    clock = iter(i * 0.01 for i in range(100_000))
+    monkeypatch.setattr(rs_check.time, "time", lambda: next(clock))
+    assert rs_check.main() == 0
+    calib = D435Calib.load(out)                                   # 정렬 모듈이 그대로 읽는다
+    assert np.allclose(calib.R, np.eye(3)) and np.allclose(calib.t, [0.015, 0, 0])
+
+
+def test_rs_check_converts_column_major_rotation(monkeypatch):
+    """librealsense rotation 은 열 우선 — 비대칭 회전으로 전치가 맞는지 확인."""
+    import sys
+    import types
+
+    from tests import fake_realsense
+    monkeypatch.setitem(sys.modules, "pyrealsense2", fake_realsense)
+    sys.modules.pop("tools.rs_check", None)
+    from tools import rs_check
+    rs_check.rs = fake_realsense
+    Rz = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])      # z 축 90°
+    col_major = Rz.T.ravel().tolist()                                         # 열 우선으로 펼친 값
+    ext = types.SimpleNamespace(rotation=col_major, translation=[0.0, 0.0, 0.0])
+    intr = types.SimpleNamespace(fx=1, fy=1, ppx=0, ppy=0, width=1, height=1)
+    stream = types.SimpleNamespace(get_extrinsics_to=lambda o: ext,
+                                   as_video_stream_profile=lambda: types.SimpleNamespace(get_intrinsics=lambda: intr))
+    profile = types.SimpleNamespace(get_stream=lambda s: stream)
+    calib = rs_check.read_calib(profile, "x", 0.001)
+    assert np.allclose(np.reshape(calib["depth_to_color"]["R"], (3, 3)), Rz)
+
+
+def test_apply_writes_measured_values_into_config(desk, truth, tmp_path):
+    import shutil
+
+    import yaml
+
+    from aple.config import CONFIG_DIR
+    cfgfile = tmp_path / "varieties.yaml"
+    shutil.copy(CONFIG_DIR / "varieties.yaml", cfgfile)
+    folder, _ = desk
+    cs.cmd_card(folder, ",".join(map(str, CARD)), None)
+    th = cs.cmd_suggest(folder, None, "fuji", apply_to=cfgfile)
+    root, _ = truth
+    s = cs.cmd_truth(root, None, "fuji", apply_to=cfgfile)
+    out = cs.cmd_curve(root / "_analysis" / "truth.csv", None, "fuji", apply_to=cfgfile, margin=0.03)
+    v = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+    assert v["varieties"]["fuji"]["hue_range_deg"][1] == round(th)
+    assert v["inspection"]["top_view_error"] == s["suggested_top_view_error"]
+    assert v["varieties"]["fuji"]["delta_up"] == round(out["chosen"].delta_up + 0.03, 2)
+    assert v["varieties"]["hongro"]["delta_up"] == 0.05                     # 다른 품종은 그대로
+
+
+def test_repeat_measures_judgment_repeatability(tmp_path):
+    """같은 장면 5장 (센서 잡음·깊이 결측이 장마다 다름) → 착색비율 흔들림이 작고 등급이 일치해야 한다."""
+    apples = [Apple((-0.10, 0.0, 0.60), 0.040, side_band(0.5)), Apple((0.10, 0.0, 0.60), 0.038, side_band(-0.6))]
+    for i in range(5):
+        color, depth, _ = render(apples, color_noise=3.0, depth_noise_m=0.0015, depth_dropout=0.15, seed=i)
+        save(tmp_path / "rep", i, color, depth)
+    s = cs.cmd_repeat(tmp_path / "rep", None, "fuji")
+    assert s["frames"] == 5 and len(s["apples"]) == 2
+    for rec in s["apples"].values():
+        assert rec["n"] == 5 and rec["grade_agreement"] == 1.0
+    assert s["worst_std"] < 0.01                                       # 1%p 미만
+    assert (tmp_path / "rep" / "_analysis" / "repeat.csv").exists()

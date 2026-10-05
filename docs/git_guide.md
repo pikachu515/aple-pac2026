@@ -42,10 +42,10 @@ PR은 main이 망가져서 네 명이 동시에 멈추는 일을 막기 위한 �
 
 | 폴더 | 담당 | GitHub |
 |---|---|---|
-| `aple/perception/`, `aple/hal/calibration.py`, `configs/` 카메라·인식·작업셀 | 역할 A | lsb1017 |
-| `aple/execution/`, `aple/planning/`, `aple/hal/piper_studio.py`, `configs/` 실행·안전 | 역할 B | dbrua3311 |
-| `aple/inspection/`, `configs/varieties.yaml` | 역할 C | pikachu515 |
-| `hardware/`, `configs/size_bins.yaml` | 역할 D | uhdahmrok |
+| `aple/perception/`, `aple/hal/calibration.py`, `configs/` 카메라·인식·작업셀 | 역할 A (이수빈) | lsb1017 |
+| `aple/execution/`, `aple/planning/`, `aple/hal/piper_studio.py`, `configs/` 실행·안전 | 역할 B (서유겸) | dbrua3311 |
+| `aple/inspection/`, `configs/varieties.yaml` | 역할 C (변승호) | pikachu515 |
+| `hardware/`, `configs/size_bins.yaml` | 역할 D (강우담) | uhdahmrok |
 | `aple/orchestration/` | 통합 (전원) | — |
 | `aple/schema.py` | **전원 합의 후에만** | — |
 

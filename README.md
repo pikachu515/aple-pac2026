@@ -2,7 +2,7 @@
 
 사과 착색 등급 판정 및 등급별 적재 시스템 (WeGo PIPER + Piper Studio)
 
-> 논리 설계는 팀 Notion 「아키텍처 및 노드 설계」, 대회 운영 기준은 **전략 종합** 문서를 따른다. 이 저장소는 코드와 설정만 관리한다.
+> 논리 설계는 팀 Notion 「아키텍처 및 노드 설계」, 대회 운영 기준은 **[전략 종합 문서](docs/strategy.md)** 를 따른다 (Notion에도 같은 내용 게시).
 > 대회 조건에 맞춘 **설계 결정과 그 이유·검토 과정**, 설계서 노드 ↔ 코드 대응은 **[docs/architecture.md](docs/architecture.md)** 에 있다.
 
 ## 시스템 구조
@@ -28,6 +28,8 @@ M4 공정 관리        상태 기계 · 예외 처리 · 사이클 기록      
 | `aple/schema.py` | 공동 | **모듈 간 데이터 계약** (설계서 메시지 정의) — 변경 시 전원 합의 |
 | `docs/interfaces.md` | 자동 생성 | 데이터 계약 다이어그램 — **[보기](docs/interfaces.md)** |
 | `docs/architecture.md` | 공동 | 설계서 노드 ↔ 코드 대응, 필수 / 확장 / 대회 후 구분 |
+| `docs/piper_studio_integration.md` | 공동 | Piper Studio 영상·깊이·회색 카드·조명 감시 연동 조사 결과 |
+| `docs/strategy.md` | 변승호 | 전략 종합 — 설계 원칙, 역할 분담, 시스템 순서별 전략, 대회 운영 절차 |
 | `aple/hal/` | 역할 A·B | Piper Studio 연동, 카메라–로봇 캘리브레이션 |
 | `aple/perception/` | 역할 A | 검출, 3D 위치·직경, 상자 점유·적재 검증 |
 | `aple/inspection/` | 역할 C | 착색비율, 다면 누적(모드 B), 등급·리젝트 |
@@ -87,6 +89,8 @@ AI 코딩 도구는 저장소의 `AGENTS.md`(Codex) · `CLAUDE.md`(Claude Code)�
 python tools/rs_check.py          # D435 연결 · USB 3 협상 · 스트림 · 깊이 유효율
 python tools/capture_snapshot.py --out data/snapshots/<날짜_장소>   # 개발용 스냅샷 저장
 python tools/color_session.py analyze data/snapshots/<날짜_장소>  # 착색비율·등급 (역할 C, docs/inspection_bench.md)
+python tools/judge_live.py                                       # Piper Studio 켠 채로 실시간 판정 (공유 메모리)
+python tools/make_figures.py                                     # 발표용 설계 근거 그림 (data/figures/)
 ```
 
 Piper Studio가 D435를 사용 중이면 장치가 점유되어 열리지 않는다. 점검은 Piper Studio 카메라 데몬을 멈춘 상태에서 수행한다.

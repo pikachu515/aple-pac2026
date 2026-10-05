@@ -144,6 +144,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | placement_verifier | `perception/box_occupancy.py` `verify_placement` | 확장 |
 | apple_crop_extractor, color_segmentation_node, surface_area_corrector | `inspection/coloration.py` `color_ratio` | 필수 — ✅ 구현·검증 |
 | surface_map_accumulator | `inspection/coloration.py` `accumulate_views` | 확장 (모드 B) — ✅ 구현·검증 |
+| (모드 B 자세 계산) | `inspection/inhand.py` — 로봇 자세 → 카메라에서 본 사과 방향·중심, 검사 각도별 예상 커버리지 | 확장 (모드 B) — ✅ 구현·검증 |
 | grade_classifier | `inspection/grade_classifier.py` | 필수 — ✅ 구현·검증 |
 | (M2 진입점) | `inspection/pipeline.py` `inspect_scene` — 스냅샷 1장의 사과 전부 판정, scene_id 불일치 거부 | 필수 — ✅ 구현·검증 |
 | top_view_estimator | 탑뷰–전표면 오차를 실측해 `ratio_lo/hi` 폭으로 사용 | 대회 후 (학습형 모델) |
@@ -167,7 +168,8 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 
 대회 전 시뮬레이션에서 검증한다.
 
-- [ ] 스냅샷: D435 컬러(보정 적용) + 정렬 깊이를 코드에서 받는 경로
+- [x] 스냅샷 경로 조사 — 공유 메모리 세그먼트, 깊이는 비정렬·8비트 인코딩 → `aple/hal/depth_align.py` 로 해결, 상세는 [piper_studio_integration.md](piper_studio_integration.md)
+- [ ] 스냅샷 실기: `piper_shm.Subscriber` 로 컬러·깊이 세그먼트 동시 읽기
 - [ ] 관절 목표 전달: 웹 조그 세션 경로로 연속 궤적 실행 가능 여부 (재발행 주기, 데드맨)
 - [ ] `kinematics.ik` 로 목표 자세 → 관절각
 - [ ] 고정 effort 1000에서 파지·과실 손상·미끄러짐 여부 실기 검증 (FSR 피드백은 필수 경로 아님)

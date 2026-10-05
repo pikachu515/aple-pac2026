@@ -6,7 +6,7 @@
 ## 프로젝트
 
 PAC 2026 사과 착색 등급 판정·적재 시스템. Python 3.12, Ubuntu 24.04, 로봇·카메라는 Piper Studio를 통해 접근한다.
-작업 전 `README.md` 와 `docs/architecture.md` 를 읽는다.
+작업 전 `README.md` 와 `docs/architecture.md` 를 읽는다. 설계 근거와 대회 운영 기준은 `docs/strategy.md` 에 있다.
 
 ## 반드시 지킬 것
 

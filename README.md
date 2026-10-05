@@ -28,6 +28,7 @@ M4 공정 관리        상태 기계 · 예외 처리 · 사이클 기록      
 | `aple/schema.py` | 공동 | **모듈 간 데이터 계약** (설계서 메시지 정의) — 변경 시 전원 합의 |
 | `docs/interfaces.md` | 자동 생성 | 데이터 계약 다이어그램 — **[보기](docs/interfaces.md)** |
 | `docs/architecture.md` | 공동 | 설계서 노드 ↔ 코드 대응, 필수 / 확장 / 대회 후 구분 |
+| `docs/piper_studio_integration.md` | 공동 | Piper Studio 영상·깊이·회색 카드·조명 감시 연동 조사 결과 |
 | `docs/strategy.md` | 변승호 | 전략 종합 — 설계 원칙, 역할 분담, 시스템 순서별 전략, 대회 운영 절차 |
 | `aple/hal/` | 역할 A·B | Piper Studio 연동, 카메라–로봇 캘리브레이션 |
 | `aple/perception/` | 역할 A | 검출, 3D 위치·직경, 상자 점유·적재 검증 |

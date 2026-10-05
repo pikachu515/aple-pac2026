@@ -7,6 +7,7 @@
 |---|---|---|
 | `hue_range_deg` 위쪽 경계 | `color_session.py suggest` | 착색 / 비착색을 가르는 색상각 |
 | `top_view_error` | `color_session.py truth` | 탑뷰만 보고 판정할 때 전표면과의 오차 → 판정 구간 폭 |
+| `delta_up` | `color_session.py curve` | '상' 판정 여유 — 리젝트율 vs 남은 오분류율 곡선에서 고른다 |
 | (확인) `min_chroma`, 하이라이트 | `analyze` 오버레이 | 그림자·반사가 착색으로 잘못 세지지 않는지 |
 
 ## 0. 준비물
@@ -122,7 +123,14 @@ python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk
 
 # ⑤ 육안 판정과 비교
 python tools/color_session.py compare data/truth/_analysis/truth.csv --labels data/truth/labels.csv
+
+# ⑥ 리젝트 곡선 → delta_up 제안 + 발표 그래프(_analysis/reject_curve.png)
+python tools/color_session.py curve   data/truth/_analysis/truth.csv --labels data/truth/labels.csv
 ```
+
+**⑥ curve 결과 읽는 법**
+- 제안 `delta_up` 은 "'중→상' 오류 0 중 리젝트가 가장 적은 점"이다. 표본이 적으면 경계에 딱 붙은 값이 나오므로 **제안값에 0.02~0.05 를 더해** 설정한다
+- `[중요] 탑뷰만으로는 '중→상' 오류를 ... 만들 수 없다` 가 나오면, 윗면만 빨간 사과가 있다는 뜻이다. 그 사과 이름이 함께 출력된다 → 다면 검사(모드 B)가 필요한 근거이므로 사진과 함께 기록해 둔다
 
 **오버레이 보는 법** — 빨강 = 착색으로 판정, 파랑 = 비착색, 칠해지지 않은 가장자리 = 비스듬해서 판정 제외
 
@@ -144,6 +152,7 @@ python tools/color_session.py compare data/truth/_analysis/truth.csv --labels da
 ## 10. 정리
 
 - [ ] `data/snapshots/…`, `data/truth/…` 폴더를 공유 드라이브 `snapshots/` 에 업로드 (역할 A도 검출 학습에 쓴다)
-- [ ] `configs/varieties.yaml` 의 `hue_range_deg`, `top_view_error` 를 바꿔 PR (`[임시]` 표시 지우기)
+- [ ] `configs/varieties.yaml` 의 `hue_range_deg`, `top_view_error`, `delta_up` 을 바꿔 PR (`[임시]` 표시 지우기)
+- [ ] `_analysis/reject_curve.png` 와 오버레이 몇 장을 공유 드라이브 `videos/`(발표 자료)에 올리기
 - [ ] Notion 실험 로그: 사과 수, 제안값, 일치율(⑤), 조명 실험 ΔE
 - [ ] `systemctl --user start piper-rsd`

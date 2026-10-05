@@ -145,6 +145,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | apple_crop_extractor, color_segmentation_node, surface_area_corrector | `inspection/coloration.py` `color_ratio` | 필수 — ✅ 구현·검증 |
 | surface_map_accumulator | `inspection/coloration.py` `accumulate_views` | 확장 (모드 B) — ✅ 구현·검증 |
 | grade_classifier | `inspection/grade_classifier.py` | 필수 — ✅ 구현·검증 |
+| (M2 진입점) | `inspection/pipeline.py` `inspect_scene` — 스냅샷 1장의 사과 전부 판정, scene_id 불일치 거부 | 필수 — ✅ 구현·검증 |
 | top_view_estimator | 탑뷰–전표면 오차를 실측해 `ratio_lo/hi` 폭으로 사용 | 대회 후 (학습형 모델) |
 | grasp_profile_selector | `planning/grasp_profile.py` | 필수 |
 | task_planner | `planning/task_planner.py` | 필수 (단순형) |
@@ -159,7 +160,8 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | arm_occlusion_masker | 스냅샷 전 팔을 scan 자세로 보내는 규칙으로 대체 | 대회 후 |
 | pipeline_scheduler | — | 대회 후 |
 | sim_bridge | — | 대회 후 |
-| report_generator, reject_curve_evaluator | 노트북 분석 | 확장 |
+| reject_curve_evaluator | `inspection/evaluation.py`, `tools/color_session.py curve` | 확장 — ✅ 구현·검증 |
+| report_generator | 노트북 분석 | 확장 |
 
 ## 4. Piper Studio 연동 시 확인할 것
 

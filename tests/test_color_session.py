@@ -135,3 +135,20 @@ def test_rs_check_passes_with_fake_camera(monkeypatch):
     clock = iter(i * 0.01 for i in range(100_000))                       # 호출마다 10 ms 흐른 것으로
     monkeypatch.setattr(rs_check.time, "time", lambda: next(clock))
     assert rs_check.main() == 0                                          # USB 3.2, 프레임 정상 → 통과
+
+
+@pytest.mark.parametrize("use_labels", [False, True])
+def test_curve_command_writes_graph_and_suggestion(truth, tmp_path, use_labels):
+    root, _ = truth
+    rows, _ = cs.truth_root(root, None, cs.params("fuji"))
+    cs.write_csv(cs.analysis_dir(root) / "truth.csv", rows)
+    labels = None
+    if use_labels:
+        labels = tmp_path / "labels.csv"
+        labels.write_text("apple,label\napple_01,상\napple_02,중\napple_03,중\n", encoding="utf-8-sig")
+    out = cs.cmd_curve(root / "_analysis" / "truth.csv", labels, "fuji")
+    # apple_03 은 윗면만 착색(탑뷰 ≈ 100%, 전표면 ≈ 35%) → 탑뷰만으로는 '중→상'을 없앨 수 없다고 알려야 한다
+    assert out["reachable"] is False
+    assert out["chosen"].up_error_rate == pytest.approx(1 / 3)
+    assert (root / "_analysis" / "curve.csv").exists()
+    assert (root / "_analysis" / "reject_curve.png").exists()

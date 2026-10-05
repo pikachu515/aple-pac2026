@@ -73,6 +73,7 @@ def grasp_candidate(apple_id=1, *, scene_id=1, collision_free=True):
 @pytest.fixture
 def cfg():
     config = load_config()
+    config["execution"]["gripper"]["control_mode"] = "calibrated_force"
     config["safety"]["gripper_effort_max"] = 1000
     config["size_bins"]["force"]["mu"] = 0.5
     config["size_bins"]["force"]["f_bruise_n"] = 30.0
@@ -96,11 +97,54 @@ def test_grasp_profile_uses_size_bin_and_calibrated_force(cfg):
     assert result.effort == pytest.approx(result.grasp_force_n * 100, abs=1)
 
 
-def test_missing_force_calibration_fails_closed():
+def test_fixed_effort_profile_does_not_require_force_sensor_calibration():
     result = select(apple(), load_config())
 
     assert result.grasp_force_n == 0
+    assert result.effort == 1000
+    assert result.feasible is True
+
+
+def test_calibrated_force_mode_fails_closed_without_calibration():
+    config = load_config()
+    config["execution"]["gripper"]["control_mode"] = "calibrated_force"
+    result = select(apple(), config)
+
+    assert result.grasp_force_n == 0
     assert result.feasible is False
+
+
+def test_fixed_effort_motion_does_not_require_force_calibration(cfg):
+    cfg["execution"]["gripper"]["control_mode"] = "fixed_effort"
+    cfg["size_bins"]["force"]["mu"] = None
+    cfg["size_bins"]["force"]["f_bruise_n"] = None
+    cfg["size_bins"]["gripper_calib"]["effort_to_force_table"] = None
+    adapter = RecordingMotionAdapter()
+    placement = PlacementPlan(
+        1, 1, Grade.UPPER, 0, (0.3, 0.2, 0.2), 0.3, 0.2, 0.01, True
+    )
+
+    result = MotionExecutor(adapter, cfg).pick_place(
+        apple(), profile(), grasp_candidate(), placement
+    )
+
+    assert result.success
+    assert adapter.calls[0][1]["effort"] == cfg["execution"]["gripper"]["fixed_effort"]
+
+
+def test_fixed_effort_motion_rejects_mismatched_profile_effort(cfg):
+    cfg["execution"]["gripper"]["control_mode"] = "fixed_effort"
+    adapter = RecordingMotionAdapter()
+    placement = PlacementPlan(
+        1, 1, Grade.UPPER, 0, (0.3, 0.2, 0.2), 0.3, 0.2, 0.01, True
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        MotionExecutor(adapter, cfg).pick_place(
+            apple(), profile(effort=900), grasp_candidate(), placement
+        )
+
+    assert adapter.calls == []
 
 
 def test_required_force_at_or_above_bruise_limit_is_infeasible(cfg):
@@ -495,3 +539,40 @@ def test_inspect_uses_profile_effort_adapter(cfg):
     assert call[1]["effort"] == 1000
     assert call[1]["timeout_s"] == cfg["execution"]["timeouts"]["inspect_s"]
     assert len(call[1]["inspection_plan"].target_tool_poses) == 2
+
+
+def _box(heights, valid=True):
+    return BoxOccupancy(1, Grade.UPPER, 1, len(heights), 0.1, 0.1, 0.1, (0.0, 0.0, 0.0),
+                        list(heights), [False] * len(heights), valid)
+
+
+def _planned(cfg):
+    planner = PlacementPlanner(cfg)
+    plan = planner.plan(apple(), grade(), [_box([0.0, 0.0, 0.0])])
+    assert plan.feasible
+    return planner, plan
+
+
+def test_verify_placement_success_releases_reservation(cfg):
+    planner, plan = _planned(cfg)
+    heights = [0.0] * 3
+    heights[plan.cell_index] = 0.078
+    result = planner.verify(plan, apple(), _box([0.0] * 3), _box(heights))
+    assert result.success and not result.rolled_out and result.verified
+    assert not planner.reserved
+
+
+def test_verify_placement_detects_roll_out(cfg):
+    planner, plan = _planned(cfg)
+    heights = [0.0] * 3
+    heights[(plan.cell_index + 1) % 3] = 0.078
+    result = planner.verify(plan, apple(), _box([0.0] * 3), _box(heights))
+    assert result.rolled_out and not result.success
+    assert not planner.reserved
+
+
+def test_verify_placement_invalid_depth_keeps_reservation(cfg):
+    planner, plan = _planned(cfg)
+    result = planner.verify(plan, apple(), _box([0.0] * 3), _box([0.0] * 3, valid=False))
+    assert not result.verified
+    assert planner.reserved

@@ -153,7 +153,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | motion_executor, scripted_backend, soft_landing | `execution/motion_executor.py` | 필수 |
 | act_backend | `hal/piper_studio.py` `run_policy` | 필수 (병행) |
 | inspect_skill | `execution/motion_executor.py` `inspect` | 확장 (모드 B) |
-| gripper_force_controller | `execution/gripper.py` | 필수 (토크 변경 범위) |
+| gripper_force_controller | `execution/gripper.py` | 확장 (FSR/힘 텔레메트리 사용 시) |
 | cycle_manager | `orchestration/cycle_manager.py` | 필수 (단순형) |
 | metrics_logger | `orchestration/metrics_logger.py` | 필수 |
 | grasp_planner (yaw 선택) | — | 확장 (사과 간격이 좁을 때) |
@@ -170,6 +170,30 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 - [ ] 스냅샷: D435 컬러(보정 적용) + 정렬 깊이를 코드에서 받는 경로
 - [ ] 관절 목표 전달: 웹 조그 세션 경로로 연속 궤적 실행 가능 여부 (재발행 주기, 데드맨)
 - [ ] `kinematics.ik` 로 목표 자세 → 관절각
-- [ ] 그리퍼 토크 1000 고정값 변경 경로
+- [ ] 고정 effort 1000에서 파지·과실 손상·미끄러짐 여부 실기 검증 (FSR 피드백은 필수 경로 아님)
 - [ ] ACT 실행 중 그리퍼 출력을 파지 프로파일 값으로 바꿀 수 있는 지점
 - [ ] 스크립트 제어 중 녹화 동작 여부 (스크립트 시연 → ACT 학습 데이터)
+
+Piper Web v0.5.9의 카메라 JPEG 프리뷰와 raw 조명 측정값은 HAL에서 개별 조회할 수 있다.
+다만 프리뷰는 동기화된 `SceneSnapshot`이 아니며, 이 API만으로는 정렬 깊이와 내참수를
+얻을 수 없다. `snapshot()`은 정렬 컬러·깊이·내참수를 제공하는 프레임 provider를 주입해야
+하며, 누락 시 실패를 명시한다. `LightingStatus`도 보정-aware provider를 주입해야 하고,
+raw 조명 측정값만으로 보정 상태를 추정하지 않는다.
+
+역할 B의 `PiperTrajectoryMotionAdapter`는 좌표를 m/rad, 자세를 xyzw 단위 쿼터니언으로
+받고, 주입된 IK·구간 안전 검사·속도 지정 가능한 전송 계층으로 Pick/Place와 인핸드
+검사 순서를 실행한다. Piper Web v0.5.9 HAL은 조그 세션 하나 안에서 관절 목표들을
+순서대로 보내고 각 목표 도달을 확인하는 `send_joint_trajectory()`를 제공한다. 그러나
+호출별 속도와 TCP 정지 자세는 제공하지 않으며, 실제 연속 궤적 동작도 시뮬레이션에서
+검증해야 한다. 따라서 이 API만으로 `PiperTrajectoryMotionAdapter`의 속도 계약이나
+Phase B 감속을 보장할 수 없다. 실제 연결에는 속도·정지 계약을 제공하는 Piper 측 전송
+계층과 카메라의 정렬 컬러·깊이·내참수 캡처 provider가 필요하다. HAL의
+`PiperStudioMotionTransport` 는 Piper Web v0.5.9에서 속도 명령이 없을 때
+joint waypoint 를 더 잘게 쪼개 감속을 근사하지만, 이건 실증된 속도 계약이 아니라
+시뮬레이션/실기 확인 전의 보조 경로다. 고정 effort 파지 완료는 센서 측정이 아니라
+그리퍼 명령 승인에 근거한 가정이다.
+
+모드 B의 각 캡처는 원래 장면보다 큰 고유 `scene_id`, `Source.IN_HAND`, `CaptureMode.FULL`,
+측정 TCP 자세, 마스크와 사과 좌표계 회전을 가져야 한다. 현재 재등급 구현은 이를
+기존 `InHandView` 누적기와 판정기로 흘려보내며, 상자 점유는 집기 전 장면의 데이터로
+계획한다. 이 장면 간 연결을 공유 계약에 반영할지는 팀 리뷰에서 확인한다.

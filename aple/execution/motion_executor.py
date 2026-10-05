@@ -24,6 +24,7 @@ from aple.execution.goal_builder import (
 )
 from aple.execution.inspect_skill import InspectionPlan, build_inspection_plan
 from aple.execution.soft_landing import SoftLandingPlan, build_soft_landing_plan
+from aple.inspection.in_hand_capture import InHandCapture
 from aple.schema import (AppleState, ExecResult, FailureCode, GraspProfile, Phase,
                          PlacementPlan)
 
@@ -76,6 +77,7 @@ class PickPhaseResult:
 class InspectionPhaseResult:
     success: bool
     captured_views: int
+    captures: tuple[InHandCapture, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,7 @@ class InspectionExecutionResult:
     failure_code: FailureCode
     phase_reached: Phase
     captured_views: int
+    captures: tuple[InHandCapture, ...] = ()
 
 
 class MotionAdapter(Protocol):
@@ -109,7 +112,6 @@ class MotionAdapter(Protocol):
         candidate: GraspCandidate,
         plan: PlacementPlan,
         targets: MotionTargets,
-        landing_plan: SoftLandingPlan,
         *,
         backend: str,
         effort: int,
@@ -124,6 +126,7 @@ class MotionAdapter(Protocol):
         profile: GraspProfile,
         plan: PlacementPlan,
         targets: MotionTargets | PlaceTargets,
+        landing_plan: SoftLandingPlan,
         *,
         effort: int,
         final_descent_m: float,
@@ -365,12 +368,15 @@ class MotionExecutor:
         expected_views = len(inspection_plan.target_tool_poses)
         if result.captured_views < 0 or result.captured_views > expected_views:
             raise ValueError("inspection backend returned an invalid captured_views count")
+        if result.captures and len(result.captures) != result.captured_views:
+            raise ValueError("inspection backend capture payload count is inconsistent")
         success = result.success and result.captured_views == expected_views
         return InspectionExecutionResult(
             success,
             FailureCode.NONE if success else FailureCode.ABORTED,
             Phase.INSPECT,
             result.captured_views,
+            result.captures,
         )
 
     def place_held_apple(
@@ -471,6 +477,20 @@ class MotionExecutor:
 
     def _checked_effort(self, profile: GraspProfile) -> int:
         effort = effort_for(profile)
+        gripper_cfg = self.cfg["execution"]["gripper"]
+        if gripper_cfg.get("control_mode", "calibrated_force") == "fixed_effort":
+            fixed_effort = gripper_cfg["fixed_effort"]
+            if isinstance(fixed_effort, bool) or not isinstance(fixed_effort, int):
+                raise ValueError("execution.gripper.fixed_effort must be an integer")
+            if effort != fixed_effort:
+                raise ValueError("profile effort does not match the configured fixed effort")
+            maximum = self.cfg.get("safety", {}).get("gripper_effort_max")
+            if isinstance(maximum, bool) or not isinstance(maximum, int) or not 0 <= maximum <= 5000:
+                raise ValueError("safety.gripper_effort_max must be an integer from 0 to 5000")
+            if effort > maximum:
+                raise ValueError("fixed effort exceeds safety.gripper_effort_max")
+            return effort
+
         force_limit = self.cfg["size_bins"]["force"].get("f_bruise_n")
         if force_limit is None:
             raise ValueError("size_bins.force.f_bruise_n must be measured before grasp execution")

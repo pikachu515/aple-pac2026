@@ -2,22 +2,31 @@
 
 from dataclasses import dataclass
 
+import numpy as np
+from dataclasses import replace
+
 import pytest
 
 from aple.config import load_config
 from aple.execution.goal_builder import Pose3D
 from aple.execution.motion_executor import GraspCandidate, PhaseAResult
 from aple.execution.pick_place_pipeline import PickPlacePipeline
+from aple.execution.motion_executor import InspectionExecutionResult
 from aple.execution.testing import RecordingMotionAdapter
+from aple.inspection.coloration import InspectParams
+from aple.inspection.in_hand_capture import InHandCapture
 from aple.schema import (
     AppleState,
     BoxOccupancy,
+    CaptureMode,
     FailureCode,
     Grade,
     GradeResult,
     InspectMode,
     Phase,
     RejectReason,
+    SceneSnapshot,
+    Source,
     TaskAction,
 )
 
@@ -248,6 +257,84 @@ def test_mode_b_does_not_place_when_not_all_views_were_captured(cfg):
     with pytest.raises(ValueError, match="successful in-hand inspection"):
         pipeline.place_regraded_apple(held, grade(final=True), [box()])
     assert not any(name == "place_phase_a" for name, _ in adapter.calls)
+
+
+def test_mode_b_regrades_new_scene_captures_and_places_using_original_occupancy(
+    cfg, monkeypatch
+):
+    from aple.execution import pick_place_pipeline as pipeline_module
+    from aple.schema import ColorRatio
+
+    adapter = RecordingMotionAdapter()
+    pipeline = PickPlacePipeline(cfg, adapter)
+    item = pipeline.plan_scene(
+        [apple()],
+        [grade(final=False)],
+        [box()],
+        [grasp_candidate()],
+    ).items[0]
+    held = pipeline.inspect_held_apple(pipeline.pick_for_inspection(item))
+    captures = tuple(
+        InHandCapture(
+            SceneSnapshot(
+                scene_id=scene_id,
+                source=Source.IN_HAND,
+                capture_mode=CaptureMode.FULL,
+                color=np.zeros((8, 8, 3), dtype=np.uint8),
+                depth_m=np.ones((8, 8), dtype=np.float32),
+                intrinsics=(100.0, 100.0, 4.0, 4.0),
+                stamp_s=float(scene_id),
+                apple_id=1,
+                view_index=index,
+                tool_pose=np.eye(4),
+            ),
+            np.ones((8, 8), dtype=bool),
+            np.eye(3),
+        )
+        for index, scene_id in enumerate((8, 9))
+    )
+    held = replace(
+        held,
+        inspection=InspectionExecutionResult(
+            True, FailureCode.NONE, Phase.INSPECT, len(captures), captures
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "accumulate_views",
+        lambda _views, _params, *, scene_id, apple_id: ColorRatio(
+            scene_id, apple_id, InspectMode.IN_HAND_MULTI, 0.8, 0.75, 0.9,
+            0.8, 0.0, 2, "fuji"
+        ),
+    )
+    params = InspectParams(
+        "fuji", 0.4, 0.05, 0.0, (-40.0, 55.0), 15.0
+    )
+
+    held = pipeline.regrade_held_apple(held, params)
+    assert held.regraded_grade is not None
+    assert held.regraded_grade.scene_id == 9
+    assert held.regraded_grade.final
+
+    placed = pipeline.place_regraded_apple(held, held.regraded_grade, [box()])
+
+    assert placed.task.grade_scene_id == 9
+    assert placed.placement is not None and placed.placement.scene_id == 7
+    assert placed.execution is not None and placed.execution.success
+
+
+def test_mode_b_regrade_requires_actual_capture_payloads(cfg):
+    adapter = RecordingMotionAdapter()
+    pipeline = PickPlacePipeline(cfg, adapter)
+    item = pipeline.plan_scene(
+        [apple()], [grade(final=False)], [box()], [grasp_candidate()]
+    ).items[0]
+    held = pipeline.inspect_held_apple(pipeline.pick_for_inspection(item))
+
+    with pytest.raises(ValueError, match="no image/depth capture payloads"):
+        pipeline.regrade_held_apple(
+            held, InspectParams("fuji", 0.4, 0.05, 0.0, (-40.0, 55.0), 15.0)
+        )
 
 
 def test_plan_scene_defers_missing_or_colliding_candidates(cfg):

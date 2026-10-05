@@ -10,6 +10,8 @@ import math
 from dataclasses import dataclass, replace
 from typing import Sequence
 
+from aple.inspection.coloration import InHandView, InspectParams, accumulate_views
+from aple.inspection.grade_classifier import classify
 from aple.execution.motion_executor import (
     GraspCandidate,
     InspectionExecutionResult,
@@ -24,13 +26,15 @@ from aple.planning.task_planner import plan_queue
 from aple.schema import (
     AppleState,
     BoxOccupancy,
+    CaptureMode,
+    ExecResult,
     GradeResult,
     GraspProfile,
-    ExecResult,
-    ExecResult,
+    InspectionPolicy,
     PlacementPlan,
     TaskAction,
     TaskItem,
+    Source,
 )
 
 
@@ -61,6 +65,7 @@ class HeldAppleWork:
     item: AppleWorkPlan
     pick: PickExecutionResult
     inspection: InspectionExecutionResult | None = None
+    regraded_grade: GradeResult | None = None
 
 
 class PickPlacePipeline:
@@ -245,6 +250,62 @@ class PickPlacePipeline:
         )
         return replace(held, inspection=result)
 
+    def regrade_held_apple(
+        self, held: HeldAppleWork, params: InspectParams
+    ) -> HeldAppleWork:
+        """Accumulate captured views and classify using the existing mode-B pipeline."""
+        inspection = held.inspection
+        if inspection is None or not inspection.success:
+            raise ValueError("a successful in-hand inspection is required before regrading")
+        if not inspection.captures:
+            raise ValueError("inspection backend returned no image/depth capture payloads")
+        if len(inspection.captures) != inspection.captured_views:
+            raise ValueError("inspection capture payload count does not match captured_views")
+
+        captures = inspection.captures
+        previous_scene_id = held.item.apple.scene_id
+        views: list[InHandView] = []
+        for index, capture in enumerate(captures):
+            snapshot = capture.snapshot
+            if snapshot.source != Source.IN_HAND or snapshot.capture_mode != CaptureMode.FULL:
+                raise ValueError("mode-B capture must be a FULL IN_HAND SceneSnapshot")
+            if snapshot.scene_id <= previous_scene_id:
+                raise ValueError("in-hand scene_ids must increase beyond the source scene")
+            if snapshot.apple_id != held.item.apple.apple_id or snapshot.view_index != index:
+                raise ValueError("in-hand snapshot apple_id/view_index does not match the capture")
+            if snapshot.tool_pose is None:
+                raise ValueError("in-hand snapshot must include the measured TCP tool_pose")
+            previous_scene_id = snapshot.scene_id
+            views.append(
+                InHandView(
+                    snapshot.color,
+                    snapshot.depth_m,
+                    snapshot.intrinsics,
+                    capture.mask,
+                    capture.rotation_camera_apple,
+                )
+            )
+
+        ratio = accumulate_views(
+            views,
+            params,
+            scene_id=captures[-1].snapshot.scene_id,
+            apple_id=held.item.apple.apple_id,
+        )
+        if ratio is None:
+            raise ValueError("no usable in-hand views were available for regrading")
+        mm_range = self._cfg["size_bins"]["gripper_range_mm"]
+        grade = classify(
+            ratio,
+            params,
+            apple=held.item.apple,
+            policy=InspectionPolicy[
+                self._cfg["inspection"].get("policy", "NEVER")
+            ],
+            gripper_range_mm=(float(mm_range[0]), float(mm_range[1])),
+        )
+        return replace(held, regraded_grade=grade)
+
     def place_regraded_apple(
         self,
         held: HeldAppleWork,
@@ -264,13 +325,20 @@ class PickPlacePipeline:
             raise ValueError("grade must be final before planning placement")
         if grade.apple_id != held.item.apple.apple_id:
             raise ValueError("grade apple_id does not match the held apple")
-        if grade.scene_id > held.item.apple.scene_id:
-            raise ValueError("grade cannot come from a newer scene than the held apple")
+        if held.regraded_grade is not None and grade != held.regraded_grade:
+            raise ValueError("grade does not match this held apple's in-hand regrade")
+        if held.inspection is not None and held.inspection.captures:
+            capture_scene_id = held.inspection.captures[-1].snapshot.scene_id
+            if grade.scene_id != capture_scene_id:
+                raise ValueError("grade scene_id must match the latest in-hand capture")
+        elif grade.scene_id > held.item.apple.scene_id:
+            raise ValueError("a newer grade scene requires in-hand capture provenance")
 
         placement = self._placement_planner.plan(
             held.item.apple,
             grade,
             list(boxes),
+            allow_newer_grade=True,
         )
         result = self._executor.place_held_apple(
             held.item.apple,

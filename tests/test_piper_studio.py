@@ -4,10 +4,18 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import numpy as np
 import pytest
 
-from aple.hal.piper_studio import PiperStudio, PiperWebError
-from aple.schema import ArmCommand
+from aple.hal.piper_studio import PiperStudio, PiperStudioMotionTransport, PiperWebError
+from aple.schema import (
+    ArmCommand,
+    CaptureMode,
+    LightState,
+    LightingStatus,
+    SceneSnapshot,
+    Source,
+)
 
 
 class FakePiperWeb:
@@ -22,6 +30,9 @@ class FakePiperWeb:
         self.estop_heartbeat_fail_after = None
         self.estop_timeout_ms = 2500
         self.estop_heartbeat_interval_ms = 500
+        self.auto_reach_goals = False
+        self.camera_preview = b"\xff\xd8test-jpeg\xff\xd9"
+        self.camera_light = {"top": {"brightness": 120.0}}
         self.raw = {
             "joint1": 0,
             "joint2": 90000,
@@ -73,6 +84,14 @@ class FakePiperWeb:
                             self._respond(401, {"detail": "login required"})
                         else:
                             self._respond(200, dict(state.raw))
+                    elif self.path == "/api/cameras/top%3Acamera/preview":
+                        self.send_response(200)
+                        self.send_header("Content-Type", "image/jpeg")
+                        self.send_header("Content-Length", str(len(state.camera_preview)))
+                        self.end_headers()
+                        self.wfile.write(state.camera_preview)
+                    elif self.path == "/api/cameras/light":
+                        self._respond(200, state.camera_light)
                     else:
                         self._respond(404, {"detail": "not found"})
 
@@ -109,6 +128,19 @@ class FakePiperWeb:
                         if state.goal_status != 200:
                             self._respond(state.goal_status, {"detail": "goal rejected"})
                         else:
+                            if state.auto_reach_goals:
+                                limits = {
+                                    "joint1": (-150, 150),
+                                    "joint2": (0, 180),
+                                    "joint3": (-170, 0),
+                                    "joint4": (-100, 100),
+                                    "joint5": (-65, 65),
+                                    "joint6": (-120, 120),
+                                }
+                                for name, (lower, upper) in limits.items():
+                                    normalized = body["values"][name]
+                                    degrees = lower + (normalized + 100) * (upper - lower) / 200
+                                    state.raw[name] = round(degrees * 1000)
                             if "gripper" in body["values"]:
                                 state.raw["gripper"] = round(body["values"]["gripper"] * 680.0)
                             self._respond(200, {"status": "ok", "goal": body["values"]})
@@ -118,6 +150,27 @@ class FakePiperWeb:
                         self._respond(404, {"detail": "not found"})
 
         return Handler
+
+
+class FakeMotionStudio:
+    def __init__(self):
+        self.calls = []
+        self.joints = (0.0,) * 6
+
+    def joint_state(self):
+        return self.joints
+
+    def send_joint_goal(self, position_rad, timeout_s):
+        self.calls.append(("goal", position_rad, timeout_s))
+        self.joints = position_rad
+
+    def send_joint_trajectory(self, waypoints, timeout_s):
+        self.calls.append(("trajectory", waypoints, timeout_s))
+        self.joints = waypoints[-1]
+
+    def send(self, command):
+        self.calls.append(("send", command))
+        self.joints = command.position_rad
 
 
 @pytest.fixture
@@ -137,6 +190,7 @@ def piper_web(monkeypatch):
             "poll_interval_s": 0.01,
             "arrival_tolerance_rad": 0.001,
             "gripper_arrival_tolerance": 1.0,
+            "camera_id": "top:camera",
             "robotd_safety_confirmed": True,
             "joint_limits_deg": {
                 "joint1": [-150, 150],
@@ -167,6 +221,136 @@ def test_joint_state_reads_v059_raw_millidegrees(piper_web):
     assert fake.calls[1][:2] == ("POST", "/api/auth/login")
 
 
+def test_camera_preview_returns_the_jpeg_bytes_without_scene_claims(piper_web):
+    fake, adapter = piper_web
+
+    jpeg = adapter.camera_preview_jpeg()
+
+    assert jpeg == fake.camera_preview
+    assert ("GET", "/api/cameras/top%3Acamera/preview", None) in fake.calls
+
+
+def test_camera_preview_requires_a_configured_camera_id(piper_web):
+    _, adapter = piper_web
+    adapter.cfg["camera_id"] = None
+
+    with pytest.raises(PiperWebError, match="piper_web.camera_id"):
+        adapter.camera_preview_jpeg()
+
+
+def test_camera_light_metrics_returns_raw_payload(piper_web):
+    fake, adapter = piper_web
+
+    assert adapter.camera_light_metrics() == fake.camera_light
+    assert ("GET", "/api/cameras/light", None) in fake.calls
+
+
+def test_snapshot_uses_an_injected_aligned_frame_provider(piper_web):
+    _, adapter = piper_web
+    expected = SceneSnapshot(
+        1,
+        Source.TOP,
+        CaptureMode.FULL,
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        np.ones((2, 2), dtype=np.float32),
+        (1.0, 1.0, 0.5, 0.5),
+        1.0,
+    )
+    configured = PiperStudio(
+        {"piper_web": dict(adapter.cfg)},
+        snapshot_provider=lambda: expected,
+    )
+
+    assert configured.snapshot() is expected
+
+
+def test_snapshot_fails_explicitly_when_no_depth_provider_is_configured(piper_web):
+    _, adapter = piper_web
+
+    with pytest.raises(PiperWebError, match="aligned depth and camera intrinsics"):
+        adapter.snapshot()
+
+
+def test_lighting_status_requires_a_calibration_aware_provider(piper_web):
+    _, adapter = piper_web
+    expected = LightingStatus(LightState.OK, 0.5, True)
+    configured = PiperStudio(
+        {"piper_web": dict(adapter.cfg)},
+        lighting_status_provider=lambda: expected,
+    )
+
+    assert configured.lighting_status() is expected
+
+
+def test_lighting_status_does_not_coerce_raw_metrics(piper_web):
+    _, adapter = piper_web
+
+    with pytest.raises(PiperWebError, match="calibration-aware"):
+        adapter.lighting_status()
+
+
+def test_motion_transport_uses_more_waypoints_when_speed_is_lower():
+    studio = FakeMotionStudio()
+    transport = PiperStudioMotionTransport(studio, max_joint_step_rad=0.2)
+
+    transport.move_joint_goal((0.6, 0.0, 0.0, 0.0, 0.0, 0.0), speed_scale=0.5, timeout_s=1.0)
+
+    kind, waypoints, timeout_s = studio.calls[0]
+    assert kind == "trajectory"
+    assert timeout_s == pytest.approx(1.0)
+    assert len(waypoints) == 6
+    assert waypoints[-1] == pytest.approx((0.6, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+
+def test_motion_transport_uses_single_goal_when_no_subdivision_is_needed():
+    studio = FakeMotionStudio()
+    transport = PiperStudioMotionTransport(studio, max_joint_step_rad=0.2)
+
+    transport.move_joint_goal((0.1, 0.0, 0.0, 0.0, 0.0, 0.0), speed_scale=1.0, timeout_s=1.0)
+
+    kind, position_rad, timeout_s = studio.calls[0]
+    assert kind == "goal"
+    assert position_rad == pytest.approx((0.1, 0.0, 0.0, 0.0, 0.0, 0.0))
+    assert timeout_s == pytest.approx(1.0)
+
+
+def test_motion_transport_uses_current_joint_state_for_gripper_commands():
+    studio = FakeMotionStudio()
+    transport = PiperStudioMotionTransport(studio, max_joint_step_rad=0.2)
+
+    transport.set_gripper_width(0.04, 1000, timeout_s=1.0)
+
+    kind, command = studio.calls[0]
+    assert kind == "send"
+    assert command.position_rad == pytest.approx((0.0,) * 6)
+    assert command.gripper_width_m == pytest.approx(0.04)
+    assert command.gripper_effort == 1000
+
+
+def test_motion_transport_tool_pose_and_capture_require_providers():
+    transport = PiperStudioMotionTransport(FakeMotionStudio(), max_joint_step_rad=0.2)
+
+    with pytest.raises(PiperWebError, match="tool_pose_provider"):
+        transport.tool_pose()
+    with pytest.raises(PiperWebError, match="in_hand_capture_provider"):
+        transport.capture_in_hand(1, 0, timeout_s=1.0)
+
+
+def test_motion_transport_passes_measured_joints_to_providers():
+    studio = FakeMotionStudio()
+    studio.joints = (0.1,) * 6
+    seen = {}
+    transport = PiperStudioMotionTransport(
+        studio,
+        max_joint_step_rad=0.2,
+        tool_pose_provider=lambda joints: ("pose", joints),
+        in_hand_capture_provider=lambda apple, view, joints, timeout_s: (apple, view, joints),
+    )
+
+    assert transport.tool_pose() == ("pose", (0.1,) * 6)
+    assert transport.capture_in_hand(7, 2, timeout_s=1.0) == (7, 2, (0.1,) * 6)
+
+
 def test_joint_goal_opens_and_closes_v059_jog_session(piper_web):
     fake, adapter = piper_web
 
@@ -184,6 +368,49 @@ def test_joint_goal_opens_and_closes_v059_jog_session(piper_web):
     assert fake.calls.index(("GET", "/api/estop/status", None)) < fake.calls.index(
         next(call for call in fake.calls if call[1] == "/api/robots/jog/start")
     )
+
+
+def test_joint_trajectory_sends_acknowledged_waypoints_in_one_jog_session(piper_web):
+    fake, adapter = piper_web
+    fake.auto_reach_goals = True
+
+    adapter.send_joint_trajectory(
+        (
+            (0.01, 1.57079632679, -1.4835298642, 0.0, 0.0, 0.0),
+            (0.02, 1.57079632679, -1.4835298642, 0.0, 0.0, 0.0),
+        ),
+        timeout_s=0.5,
+    )
+
+    posts = [call[1] for call in fake.calls if call[0] == "POST"]
+    assert posts.count("/api/robots/jog/start") == 1
+    assert posts.count("/api/robots/jog/goal") == 2
+    assert posts.count("/api/robots/jog/stop") == 1
+    assert adapter.joint_state()[0] == pytest.approx(0.02, abs=0.001)
+
+
+def test_joint_trajectory_validates_every_waypoint_before_starting(piper_web):
+    fake, adapter = piper_web
+
+    with pytest.raises(ValueError, match="joint1 target is outside"):
+        adapter.send_joint_trajectory(
+            (
+                (0.01, 1.57079632679, -1.4835298642, 0.0, 0.0, 0.0),
+                (10.0, 1.57079632679, -1.4835298642, 0.0, 0.0, 0.0),
+            ),
+            timeout_s=0.5,
+        )
+
+    assert not any(call[1] == "/api/robots/jog/start" for call in fake.calls)
+
+
+def test_joint_trajectory_rejects_empty_waypoint_sequence(piper_web):
+    fake, adapter = piper_web
+
+    with pytest.raises(ValueError, match="at least one joint waypoint"):
+        adapter.send_joint_trajectory((), timeout_s=0.5)
+
+    assert not any(call[1] == "/api/robots/jog/start" for call in fake.calls)
 
 
 def test_joint_goal_refuses_when_estop_bus_is_unavailable(piper_web):

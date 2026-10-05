@@ -3,4 +3,27 @@ execution:
   default_backend: scripted     # scripted | act — 2일차 04:00 성공률 비교 후 결정
   act: {task_text: "Pick the apple and place it in the box", timeout_s: 30.0}
   soft_landing: {final_descent_m: 0.03, slow_speed_scale: 0.1}
-  gripper: {close_speed: null, slip_width_m: 0.002}
+  timeouts: {named_pose_s: 20.0, phase_a_s: 30.0, phase_b_s: 15.0, inspect_s: 30.0}
+  gripper:
+    close_speed: null
+    slip_width_m: 0.002
+    opening_margin_m: 0.005    # 초기값: 사과 직경보다 5 mm 여유
+    fixed_effort: 1000         # 초기 실험값 — 사과를 관찰하며 수동 조정 후 고정
+piper_web:
+  enabled: false               # 실기 연결은 안전 설정과 follower iface 확인 후 명시적으로 활성화
+  base_url: "http://127.0.0.1:8000"
+  iface: null                  # Piper Web에 등록된 follower 이름
+  request_timeout_s: 3.0
+  goal_timeout_s: 20.0
+  poll_interval_s: 0.1
+  arrival_tolerance_rad: 0.017453292519943295
+  gripper_arrival_tolerance: 2.0
+  robotd_safety_confirmed: false
+  joint_limits_deg:
+    joint1: [-150, 150]
+    joint2: [0, 180]
+    joint3: [-170, 0]
+    joint4: [-100, 100]
+    joint5: [-65, 65]
+    joint6: [-120, 120]
+  gripper_width_range_m: null  # 실측한 [닫힘 폭, 열림 폭]을 설정해야 그리퍼 명령 가능

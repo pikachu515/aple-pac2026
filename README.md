@@ -90,6 +90,7 @@ python tools/rs_check.py          # D435 연결 · USB 3 협상 · 스트림 · 
 python tools/capture_snapshot.py --out data/snapshots/<날짜_장소>   # 개발용 스냅샷 저장
 python tools/color_session.py analyze data/snapshots/<날짜_장소>  # 착색비율·등급 (역할 C, docs/inspection_bench.md)
 python tools/judge_live.py                                       # Piper Studio 켠 채로 실시간 판정 (공유 메모리)
+python tools/make_figures.py                                     # 발표용 설계 근거 그림 (data/figures/)
 ```
 
 Piper Studio가 D435를 사용 중이면 장치가 점유되어 열리지 않는다. 점검은 Piper Studio 카메라 데몬을 멈춘 상태에서 수행한다.

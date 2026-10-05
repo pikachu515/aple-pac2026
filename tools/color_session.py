@@ -7,6 +7,9 @@
   4. truth    사과마다 자세를 바꿔 찍은 6장으로 전표면 비율을 구하고, 탑뷰와의 오차를 잰다
   5. compare  육안 판정표와 비교해 일치율을 본다
   6. curve    판정 여유(delta_up)별 리젝트율 vs 남은 오분류율 곡선 → delta_up 제안, 발표 그래프
+  7. repeat   같은 장면을 여러 번 찍은 폴더로 판정 재현성(사과별 착색비율 흔들림, 등급 일치율)을 잰다
+
+  suggest · truth · curve 에 --apply 를 붙이면 제안값을 configs/varieties.yaml 에 바로 써 넣는다
 
     python tools/color_session.py card    data/snapshots/1006_desk
     python tools/color_session.py analyze data/snapshots/1006_desk
@@ -29,7 +32,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from aple.config import load_config  # noqa: E402
+from aple.config import CONFIG_DIR, load_config, set_config_value  # noqa: E402
 from aple.inspection.color import (CardCalib, apply_gain, bgr_to_lab, calibrate_card, card_brightness,  # noqa: E402
                                    hue_chroma, lighting_status, suggest_hue_max)
 from aple.inspection.coloration import (InspectParams, measure_view, params_from_config, ratio_from_view,  # noqa: E402
@@ -40,6 +43,7 @@ from aple.inspection.standalone import segment_apples  # noqa: E402
 from aple.schema import Grade, LightState  # noqa: E402
 
 GRADE_KO = {Grade.UPPER: "상", Grade.MIDDLE: "중", Grade.REJECT: "리젝트"}
+VARIETIES = CONFIG_DIR / "varieties.yaml"
 LABEL_MAP = {"상": Grade.UPPER, "u": Grade.UPPER, "upper": Grade.UPPER,
              "중": Grade.MIDDLE, "m": Grade.MIDDLE, "middle": Grade.MIDDLE}
 
@@ -193,7 +197,7 @@ def collect_apple_pixels(folder: Path, calib: CardCalib | None, p: InspectParams
     return np.concatenate(hs), np.concatenate(cs)
 
 
-def cmd_suggest(folder: Path, card: str | None, variety: str | None) -> float:
+def cmd_suggest(folder: Path, card: str | None, variety: str | None, apply_to: Path | None = None) -> float:
     p = params(variety)
     h, c = collect_apple_pixels(folder, find_card(folder, card), p)
     th = suggest_hue_max(h, c, p.min_chroma)
@@ -219,6 +223,9 @@ def cmd_suggest(folder: Path, card: str | None, variety: str | None) -> float:
         print(f"  히스토그램: {analysis_dir(folder) / 'hue_hist.png'}")
     except ImportError:
         pass
+    if apply_to is not None:
+        lo = p.hue_range_deg[0]
+        print("  적용:", set_config_value(apply_to, f"varieties.{p.variety}.hue_range_deg", [int(lo), int(round(th))]).strip())
     return th
 
 
@@ -257,7 +264,7 @@ def truth_root(root: Path, calib: CardCalib | None, p: InspectParams) -> tuple[l
     return rows, summary
 
 
-def cmd_truth(root: Path, card: str | None, variety: str | None) -> dict:
+def cmd_truth(root: Path, card: str | None, variety: str | None, apply_to: Path | None = None) -> dict:
     p = params(variety)
     rows, s = truth_root(root, find_card(root, card), p)
     write_csv(analysis_dir(root) / "truth.csv", rows)
@@ -267,6 +274,8 @@ def cmd_truth(root: Path, card: str | None, variety: str | None) -> dict:
     print(f"\n사과 {s['apples']}개 - 탑뷰 오차 평균 {s['mae'] * 100:.1f}%p, 90% 지점 {s['p90'] * 100:.1f}%p")
     print(f"제안: configs/varieties.yaml 의 top_view_error: {s['suggested_top_view_error']:.2f}  (현재 {p.top_view_error:.2f})")
     print(f"CSV: {analysis_dir(root) / 'truth.csv'}")
+    if apply_to is not None:
+        print("  적용:", set_config_value(apply_to, "inspection.top_view_error", s["suggested_top_view_error"]).strip())
     return s
 
 
@@ -310,7 +319,8 @@ def _cr(ratio: float, p: InspectParams):
 
 # ---------------------------------------------------------------- 6. curve
 
-def cmd_curve(truth_csv: Path, labels_csv: Path | None, variety: str | None, max_up_error: float = 0.0) -> dict:
+def cmd_curve(truth_csv: Path, labels_csv: Path | None, variety: str | None, max_up_error: float = 0.0,
+              apply_to: Path | None = None, margin: float = 0.03) -> dict:
     """정답: --labels 가 있으면 육안 판정(상/중, '애매' 제외), 없으면 전표면 착색비율 ≥ 기준."""
     p = params(variety)
     rows = list(csv.DictReader(truth_csv.open(encoding="utf-8-sig")))
@@ -358,7 +368,48 @@ def cmd_curve(truth_csv: Path, labels_csv: Path | None, variety: str | None, max
         print("         → 이런 사과는 다면 검사(모드 B, 적응형)로만 잡힌다. 발표 근거로 쓸 수 있다")
     if len(measured) < 15:
         print("  [주의] 사과 수가 적어 곡선이 거칠다 - 운용점은 참고용, 현장 표본으로 다시 확인")
+    if apply_to is not None:
+        value = round(best.delta_up + margin, 2)            # 표본이 적어 경계에 붙은 값 → 여유를 더한다
+        print(f"  적용 (제안 {best.delta_up:+.2f} + 여유 {margin:.2f}):",
+              set_config_value(apply_to, f"varieties.{p.variety}.delta_up", value).strip())
     return {"chosen": best, "curve": curve, "reachable": reachable}
+
+
+# ---------------------------------------------------------------- 7. repeat
+
+def cmd_repeat(folder: Path, card: str | None, variety: str | None) -> dict:
+    """같은 장면(사과를 움직이지 않음)을 여러 장 찍은 폴더 → 사과별 착색비율 표준편차와 등급 일치율.
+
+    사과 번호는 장마다 위→아래, 왼→오 순서로 매겨지므로 사과를 움직이지 않으면 같은 번호가 같은 사과다.
+    """
+    p = params(variety)
+    rows = analyze_folder(folder, find_card(folder, card), p, save_images=False)
+    by_apple: dict[int, list[dict]] = {}
+    for r in rows:
+        by_apple.setdefault(r["apple"], []).append(r)
+    files = len({r["file"] for r in rows})
+    out, summary = [], {"frames": files, "apples": {}}
+    print(f"같은 장면 {files}장, 사과 {len(by_apple)}개")
+    print(f"{'사과':>4}{'장':>4}{'평균':>8}{'표준편차':>9}{'범위':>8}{'등급 일치':>9}")
+    for a, rs in sorted(by_apple.items()):
+        ratios = np.array([r["ratio"] for r in rs])
+        grades = [r["grade"] for r in rs]
+        mode = max(set(grades), key=grades.count)
+        agree = grades.count(mode) / len(grades)
+        rec = {"apple": a, "n": len(rs), "mean": round(float(ratios.mean()), 4), "std": round(float(ratios.std()), 4),
+               "range": round(float(ratios.max() - ratios.min()), 4), "grade": mode, "grade_agreement": round(agree, 3)}
+        out.append(rec)
+        summary["apples"][a] = rec
+        print(f"{a:>4}{len(rs):>4}{rec['mean'] * 100:>7.1f}%{rec['std'] * 100:>8.2f}%p{rec['range'] * 100:>7.1f}%p"
+              f"{agree:>9.0%}")
+    if files < 2 or not out:
+        print("  [주의] 같은 장면을 2장 이상 찍어야 재현성을 잴 수 있다")
+    write_csv(analysis_dir(folder) / "repeat.csv", out)
+    worst = max((r["std"] for r in out), default=0.0)
+    summary["worst_std"] = worst
+    print()
+    print(f"가장 크게 흔들린 사과의 표준편차 {worst * 100:.2f}%p  (판정 구간 ±{p.top_view_error * 100:.0f}%p 와 비교)")
+    return summary
 
 
 # ---------------------------------------------------------------- CLI
@@ -370,11 +421,13 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("folder", type=Path)
     a.add_argument("--roi", help="x,y,w,h (화면 없이 지정할 때)")
     a.add_argument("--file", help="기준으로 쓸 스냅샷 (기본: 폴더 첫 장)")
-    for name in ("analyze", "suggest", "truth"):
+    for name in ("analyze", "suggest", "truth", "repeat"):
         b = sub.add_parser(name)
         b.add_argument("folder", type=Path)
         b.add_argument("--card", help="card.json 경로 (기본: 폴더 안 card.json)")
         b.add_argument("--variety", choices=["fuji", "hongro"])
+        if name in ("suggest", "truth"):
+            b.add_argument("--apply", action="store_true", help="제안값을 configs/varieties.yaml 에 바로 써 넣는다")
     c = sub.add_parser("compare")
     c.add_argument("truth_csv", type=Path)
     c.add_argument("--labels", type=Path, required=True)
@@ -384,6 +437,8 @@ def main(argv: list[str] | None = None) -> None:
     k.add_argument("--labels", type=Path)
     k.add_argument("--variety", choices=["fuji", "hongro"])
     k.add_argument("--max-up-error", type=float, default=0.0, help="허용할 '중→상' 오류 비율 (기본 0)")
+    k.add_argument("--apply", action="store_true", help="제안 delta_up + 여유를 configs/varieties.yaml 에 써 넣는다")
+    k.add_argument("--margin", type=float, default=0.03, help="--apply 때 제안값에 더할 여유 (기본 0.03)")
     args = ap.parse_args(argv)
 
     if args.cmd == "card":
@@ -391,13 +446,16 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "analyze":
         cmd_analyze(args.folder, args.card, args.variety)
     elif args.cmd == "suggest":
-        cmd_suggest(args.folder, args.card, args.variety)
+        cmd_suggest(args.folder, args.card, args.variety, VARIETIES if args.apply else None)
+    elif args.cmd == "repeat":
+        cmd_repeat(args.folder, args.card, args.variety)
     elif args.cmd == "truth":
-        cmd_truth(args.folder, args.card, args.variety)
+        cmd_truth(args.folder, args.card, args.variety, VARIETIES if args.apply else None)
     elif args.cmd == "compare":
         cmd_compare(args.truth_csv, args.labels, args.variety)
     else:
-        cmd_curve(args.truth_csv, args.labels, args.variety, args.max_up_error)
+        cmd_curve(args.truth_csv, args.labels, args.variety, args.max_up_error,
+                  VARIETIES if args.apply else None, args.margin)
 
 
 if __name__ == "__main__":

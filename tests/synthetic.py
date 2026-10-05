@@ -43,6 +43,11 @@ def side_band(x0: float) -> Callable[[np.ndarray], np.ndarray]:
     return lambda n: n[:, 0] > x0
 
 
+def blush(width: float = 1.2) -> Callable[[np.ndarray], np.ndarray]:
+    """실제 사과처럼 적색에서 황색으로 서서히 바뀌는 착색 (0~1 섞임 비율)."""
+    return lambda n: np.clip((n[:, 0] + width / 2) / width, 0.0, 1.0)
+
+
 def full_truth(pattern, samples: int = 400_000, seed: int = 0) -> float:
     v = np.random.default_rng(seed).normal(size=(samples, 3))
     v /= np.linalg.norm(v, axis=1, keepdims=True)
@@ -105,9 +110,9 @@ def render(apples: list[Apple], *, table_z: float = 0.65, tint=(1.0, 1.0, 1.0),
         p = rays[m] * best_t[m][:, None]
         n_cam = (p - np.asarray(a.center)) / a.radius
         n_apple = n_cam @ a.R_cam_apple
-        col = a.pattern(n_apple)
+        col = np.asarray(a.pattern(n_apple), dtype=float)          # bool(착색 여부) 또는 0~1(적색 섞임 정도)
         shade = 0.45 + 0.55 * np.clip(-(n_cam * rays[m]).sum(axis=1), 0, 1)   # 밝기만 바꾸고 색상각은 유지
-        lin[m] = np.where(col[:, None], RED, YELLOW) * shade[:, None]
+        lin[m] = (YELLOW + (RED - YELLOW) * col[:, None]) * shade[:, None]
     lin *= np.asarray(tint)
     if shadow_rect is not None:           # 팔 등이 드리운 그림자 (사과·테이블 모두 어두워짐)
         x, y, w, h = shadow_rect

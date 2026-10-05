@@ -190,3 +190,38 @@ def test_rs_check_converts_column_major_rotation(monkeypatch):
     profile = types.SimpleNamespace(get_stream=lambda s: stream)
     calib = rs_check.read_calib(profile, "x", 0.001)
     assert np.allclose(np.reshape(calib["depth_to_color"]["R"], (3, 3)), Rz)
+
+
+def test_apply_writes_measured_values_into_config(desk, truth, tmp_path):
+    import shutil
+
+    import yaml
+
+    from aple.config import CONFIG_DIR
+    cfgfile = tmp_path / "varieties.yaml"
+    shutil.copy(CONFIG_DIR / "varieties.yaml", cfgfile)
+    folder, _ = desk
+    cs.cmd_card(folder, ",".join(map(str, CARD)), None)
+    th = cs.cmd_suggest(folder, None, "fuji", apply_to=cfgfile)
+    root, _ = truth
+    s = cs.cmd_truth(root, None, "fuji", apply_to=cfgfile)
+    out = cs.cmd_curve(root / "_analysis" / "truth.csv", None, "fuji", apply_to=cfgfile, margin=0.03)
+    v = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+    assert v["varieties"]["fuji"]["hue_range_deg"][1] == round(th)
+    assert v["inspection"]["top_view_error"] == s["suggested_top_view_error"]
+    assert v["varieties"]["fuji"]["delta_up"] == round(out["chosen"].delta_up + 0.03, 2)
+    assert v["varieties"]["hongro"]["delta_up"] == 0.05                     # 다른 품종은 그대로
+
+
+def test_repeat_measures_judgment_repeatability(tmp_path):
+    """같은 장면 5장 (센서 잡음·깊이 결측이 장마다 다름) → 착색비율 흔들림이 작고 등급이 일치해야 한다."""
+    apples = [Apple((-0.10, 0.0, 0.60), 0.040, side_band(0.5)), Apple((0.10, 0.0, 0.60), 0.038, side_band(-0.6))]
+    for i in range(5):
+        color, depth, _ = render(apples, color_noise=3.0, depth_noise_m=0.0015, depth_dropout=0.15, seed=i)
+        save(tmp_path / "rep", i, color, depth)
+    s = cs.cmd_repeat(tmp_path / "rep", None, "fuji")
+    assert s["frames"] == 5 and len(s["apples"]) == 2
+    for rec in s["apples"].values():
+        assert rec["n"] == 5 and rec["grade_agreement"] == 1.0
+    assert s["worst_std"] < 0.01                                       # 1%p 미만
+    assert (tmp_path / "rep" / "_analysis" / "repeat.csv").exists()

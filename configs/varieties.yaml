@@ -1,15 +1,15 @@
 # 품종·판정 (설계서 9.3 varieties.yaml) — 역할 C
-# coloring_threshold 는 농산물 표준규격 1011 '상' 기준.
+# standard 는 농산물 표준규격 1011 착색비율 하한. 두 상자를 가르는 기준은 inspection.box_boundary 로 고른다.
 # [임시] 표시 값은 사과 표본 실측 전 초기값이다. tools/color_session.py suggest / truth 결과로 교체한다.
 varieties:
   fuji:
-    coloring_threshold: 0.4
+    standard: {특: 0.60, 상: 0.40, 보통: 0.20}
     delta_up: 0.05                # [임시] '상' 판정 여유 — 리젝트 곡선으로 조정
     delta_mid: 0.0                # [임시]
     hue_range_deg: [-40, 55]      # [임시] 착색 색상각 범위 (0 = 적색, 90 = 황색). suggest 로 확정
     min_chroma: 15                # [임시] 무채색(그림자·반사) 제외
   hongro:
-    coloring_threshold: 0.5
+    standard: {특: 0.70, 상: 0.50, 보통: 0.30}
     delta_up: 0.05
     delta_mid: 0.0
     hue_range_deg: [-40, 55]
@@ -17,10 +17,12 @@ varieties:
 inspection:
   default_variety: fuji
   policy: NEVER                   # NEVER(모드 A) | ALWAYS(모드 B) | ADAPTIVE
+  box_boundary: 상                # UPPER 상자 최소 등급. 미션이 "특/상" 분류면 특 으로 바꾼다
   judge_camera: top               # 판정은 D435 탑뷰만 (전략 S5-4)
   cos_theta_min: 0.5              # 법선–시선 60° 이내만 판정 (탑뷰 커버리지 ≈ 0.25)
   mask_erode_px: 2                # 마스크 가장자리 배경 섞임 제거
   highlight: {min_L: 90, max_chroma: 12}   # 정반사 하이라이트 제외
+  shadow: {max_L: 15, max_fraction: 0.15}   # [임시] L* 15 미만 면적이 15% 넘으면 판정 보류·재촬영 (비율은 고치지 않는다)
   top_view_error: 0.10            # [임시] 탑뷰 ↔ 전표면 오차 → 판정 구간 폭. truth 로 확정
   min_coverage: 0.15
   max_view_disagreement: 0.25     # [임시] 모드 B 뷰 간 편차 한계

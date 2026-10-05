@@ -73,6 +73,7 @@ def coverage_truth(apple: Apple, cos_min: float = 0.5, samples: int = 400_000, s
 def render(apples: list[Apple], *, table_z: float = 0.65, tint=(1.0, 1.0, 1.0),
            card_rect: tuple[int, int, int, int] | None = None, depth_dropout: float = 0.0,
            highlight_on: int | None = None, color_noise: float = 0.0, depth_noise_m: float = 0.0,
+           shadow_rect: tuple[int, int, int, int] | None = None, shadow_factor: float = 0.08,
            intr=INTR, size=SIZE, seed: int = 0):
     """→ (color BGR uint8, depth_m, [정답 마스크])"""
     H, W = size
@@ -108,6 +109,9 @@ def render(apples: list[Apple], *, table_z: float = 0.65, tint=(1.0, 1.0, 1.0),
         shade = 0.45 + 0.55 * np.clip(-(n_cam * rays[m]).sum(axis=1), 0, 1)   # 밝기만 바꾸고 색상각은 유지
         lin[m] = np.where(col[:, None], RED, YELLOW) * shade[:, None]
     lin *= np.asarray(tint)
+    if shadow_rect is not None:           # 팔 등이 드리운 그림자 (사과·테이블 모두 어두워짐)
+        x, y, w, h = shadow_rect
+        lin[y:y + h, x:x + w] *= shadow_factor
     if highlight_on is not None:          # 사과 꼭대기 근처 정반사 하이라이트
         m = masks[highlight_on]
         cyx = np.argwhere(m).mean(axis=0)

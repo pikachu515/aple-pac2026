@@ -32,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aple.config import load_config  # noqa: E402
 from aple.inspection.color import (CardCalib, apply_gain, bgr_to_lab, calibrate_card, card_brightness,  # noqa: E402
                                    hue_chroma, lighting_status, suggest_hue_max)
-from aple.inspection.coloration import InspectParams, measure_view, params_from_config, ratio_from_view  # noqa: E402
+from aple.inspection.coloration import (InspectParams, measure_view, params_from_config, ratio_from_view,  # noqa: E402
+                                        standard_grade)
 from aple.inspection.evaluation import pick_delta_up, plot_curve, reject_curve  # noqa: E402
 from aple.inspection.grade_classifier import classify  # noqa: E402
 from aple.inspection.standalone import segment_apples  # noqa: E402
@@ -142,13 +143,15 @@ def analyze_folder(folder: Path, calib: CardCalib | None, p: InspectParams, save
             if vm is None:
                 items.append((det.det_id, None, "측정 실패"))
                 continue
-            g = classify(ratio_from_view(vm, p, 0, det.det_id), p, light=light)
+            shaded = vm.shadow_fraction > p.max_shadow_fraction        # 그림자가 많으면 판정 보류 (재촬영)
+            g = classify(None if shaded else ratio_from_view(vm, p, 0, det.det_id), p, light=light, apple_id=det.det_id)
             items.append((det.det_id, vm, f"{vm.ratio_visible * 100:.0f}% {GRADE_EN[g.grade]}"))
             rows.append({
                 "file": path.name, "apple": det.det_id,
                 "diameter_mm": round(vm.sphere.radius * 2000, 1),
                 "ratio": round(vm.ratio_visible, 3), "ratio_lo": round(g.ratio_lo, 3), "ratio_hi": round(g.ratio_hi, 3),
                 "coverage": round(vm.coverage, 3), "grade": GRADE_KO[g.grade], "reason": g.reject_reason.name,
+                "standard": standard_grade(vm.ratio_visible, p), "shadow_pct": round(vm.shadow_fraction * 100, 1),
                 "depth_fit_mm": round(vm.sphere.fit_residual * 1000, 1),
                 "light_dE": round(light.delta_e, 2) if light else "",
             })
@@ -161,10 +164,14 @@ def analyze_folder(folder: Path, calib: CardCalib | None, p: InspectParams, save
 def cmd_analyze(folder: Path, card: str | None, variety: str | None) -> None:
     p = params(variety)
     rows = analyze_folder(folder, find_card(folder, card), p)
-    print(f"\n품종 {p.variety}, 기준 {p.coloring_threshold:.0%}, 착색 색상각 {p.hue_range_deg}, 판정 구간 ±{p.top_view_error:.2f}")
-    print(f"{'파일':<16}{'번호':>4}{'직경mm':>8}{'착색':>7}{'등급':>6}  사유")
+    print()
+    print(f"품종 {p.variety}, 상자 기준 '{p.box_boundary}' 이상 {p.coloring_threshold:.0%}, 착색 색상각 {p.hue_range_deg}, "
+          f"판정 구간 ±{p.top_view_error:.2f}")
+    print(f"{'파일':<16}{'번호':>4}{'직경mm':>8}{'착색':>7}{'규격':>5}{'판정':>7}  사유")
     for r in rows:
-        print(f"{r['file']:<16}{r['apple']:>4}{r['diameter_mm']:>8}{r['ratio'] * 100:>6.0f}%{r['grade']:>6}  {r['reason']}")
+        shade = f" (그림자 {r['shadow_pct']:.0f}%)" if r["reason"] == "OCCLUDED" else ""
+        print(f"{r['file']:<16}{r['apple']:>4}{r['diameter_mm']:>8}{r['ratio'] * 100:>6.0f}%{r['standard']:>5}"
+              f"{r['grade']:>7}  {r['reason']}{shade}")
     print(f"\n오버레이·CSV: {analysis_dir(folder)}  (빨강 = 착색, 파랑 = 비착색, 칠해지지 않은 가장자리는 판정 제외)")
 
 

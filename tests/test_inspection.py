@@ -145,6 +145,45 @@ def test_realistic_sensor_noise():
         assert vm.sphere.radius == pytest.approx(a.radius, rel=0.06)
 
 
+def test_shadow_is_measured_not_corrected():
+    """그림자를 빼면 그늘진 쪽 색만 빠져 치우친다 — 반쪽 착색 사과의 황색 쪽에 그림자를 드리워 확인.
+
+    실험 (색 잡음 σ3): 그림자 픽셀을 제외하면 49% → 52~83% 로 부풀었다. 그래서 비율은 고치지 않고
+    그림자 면적 비율만 재서, 많으면 재촬영한다.
+    """
+    a = Apple((0.0, 0.0, 0.60), 0.04, half_red)
+    base, depth, masks = render([a], color_noise=3.0, seed=1)
+    shaded, _, _ = render([a], shadow_rect=(0, 0, 315, 480), shadow_factor=0.04, color_noise=3.0, seed=1)
+    v0 = measure_view(base, depth, masks[0], INTR, P)
+    v1 = measure_view(shaded, depth, masks[0], INTR, P)
+    assert v0.shadow_fraction < 0.01
+    assert v1.shadow_fraction > 0.3                                  # 사과의 절반가량이 그늘
+    assert v1.ratio_visible == pytest.approx(v0.ratio_visible, abs=0.03)   # 비율 자체는 그대로
+
+
+def test_heavily_shaded_apple_is_sent_back_for_rescan():
+    from aple.inspection.pipeline import inspect_scene
+    apples = [Apple((-0.10, 0.0, 0.60), 0.04, half_red), Apple((0.10, 0.0, 0.60), 0.04, half_red)]
+    color, depth, _ = render(apples, shadow_rect=(0, 0, 230, 480), shadow_factor=0.04)   # 왼쪽 사과만 그늘
+    snap = SceneSnapshot(1, Source.TOP, CaptureMode.FULL, color, depth, INTR, 0.0)
+    res = inspect_scene(snap, segment_apples(color, depth, INTR, scene_id=1), None, P)
+    assert res[0].reject_reason == RejectReason.OCCLUDED            # 재촬영 대상 (리젝트 상자 아님)
+    assert res[1].reject_reason != RejectReason.OCCLUDED
+
+
+def test_box_boundary_follows_standard_grades():
+    from aple.inspection.coloration import standard_grade
+    cfg = load_config()
+    assert params_from_config(cfg, "fuji").coloring_threshold == 0.40
+    cfg["inspection"]["box_boundary"] = "특"                    # 미션이 '특/상' 분류일 때
+    assert params_from_config(cfg, "fuji").coloring_threshold == 0.60
+    assert params_from_config(cfg, "hongro").coloring_threshold == 0.70
+    cfg["inspection"]["box_boundary"] = "최상"
+    with pytest.raises(ValueError):
+        params_from_config(cfg, "fuji")
+    assert [standard_grade(r, P) for r in (0.65, 0.45, 0.25, 0.10)] == ["특", "상", "보통", "등외"]
+
+
 def test_specular_highlight_is_excluded():
     a = Apple((0.0, 0.0, 0.60), 0.04, lambda n: np.ones(len(n), bool))     # 전체 착색
     color, depth, masks = render([a], highlight_on=0)

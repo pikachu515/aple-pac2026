@@ -4,6 +4,9 @@
 
 픽셀 판정   h = atan2(b*, a*) ∈ hue_range  AND  C* ≥ min_chroma  → 착색
             L* ≥ highlight.min_L AND C* < highlight.max_chroma → 정반사 하이라이트, 판정에서 제외
+그림자     L* < shadow_max_L 인 면적 비율을 shadow_fraction 으로 잰다. 비율을 고치지는 않는다 —
+            그림자만 빼면 그늘진 쪽 색만 빠져 한쪽으로 치우친다(적색이 황색보다 본래 어둡다).
+            그림자가 많으면 판정하지 않고 다시 찍는다 (pipeline.inspect_scene → OCCLUDED).
 구 법선     n_i = (p_i − c) / r            (p_i: 시선과 구 앞면의 교점 — 깊이 결측에도 동작)
 경사        cosθ_i = −n_i · v_i
 면적 요소   dA_i = t_i² · v_z³ / (fx·fy) / cosθ_i,   cosθ_i ≥ cos_theta_min 만 포함
@@ -28,7 +31,7 @@ from aple.schema import AppleDetection2D, ColorRatio, InspectMode, SceneSnapshot
 @dataclass
 class InspectParams:
     variety: str
-    coloring_threshold: float          # '상' 기준 T (0~1)
+    coloring_threshold: float          # 두 상자를 가르는 기준 T (0~1) = standard[box_boundary]
     delta_up: float
     delta_mid: float
     hue_range_deg: tuple[float, float]
@@ -36,6 +39,10 @@ class InspectParams:
     cos_theta_min: float = 0.5
     highlight_min_L: float = 90.0
     highlight_max_chroma: float = 12.0
+    shadow_max_L: float = 15.0
+    max_shadow_fraction: float = 0.15
+    standard: dict = field(default_factory=dict)   # 표준규격 등급별 착색비율 하한 {"특": 0.6, "상": 0.4, "보통": 0.2}
+    box_boundary: str = "상"                       # UPPER 상자로 보낼 최소 등급
     mask_erode_px: int = 2
     top_view_error: float = 0.10       # 탑뷰 ↔ 전표면 오차 (실측 전 임시값)
     min_coverage: float = 0.15
@@ -51,9 +58,13 @@ def params_from_config(cfg: dict, variety: str | None = None) -> InspectParams:
     variety = variety or ins["default_variety"]
     v = cfg["varieties"][variety]
     hl = ins.get("highlight", {})
+    standard = dict(v.get("standard") or {"상": v["coloring_threshold"]})
+    boundary = ins.get("box_boundary", "상")
+    if boundary not in standard:
+        raise ValueError(f"box_boundary '{boundary}' 가 {variety} 표준 등급 {list(standard)} 에 없다")
     return InspectParams(
         variety=variety,
-        coloring_threshold=v["coloring_threshold"],
+        coloring_threshold=float(standard[boundary]),
         delta_up=v["delta_up"],
         delta_mid=v["delta_mid"],
         hue_range_deg=tuple(v["hue_range_deg"]),
@@ -61,6 +72,10 @@ def params_from_config(cfg: dict, variety: str | None = None) -> InspectParams:
         cos_theta_min=ins.get("cos_theta_min", 0.5),
         highlight_min_L=hl.get("min_L", 90.0),
         highlight_max_chroma=hl.get("max_chroma", 12.0),
+        shadow_max_L=ins.get("shadow", {}).get("max_L", 15.0),
+        max_shadow_fraction=ins.get("shadow", {}).get("max_fraction", 0.15),
+        standard=standard,
+        box_boundary=boundary,
         mask_erode_px=ins.get("mask_erode_px", 2),
         top_view_error=ins.get("top_view_error", 0.10),
         min_coverage=ins.get("min_coverage", 0.15),
@@ -85,6 +100,7 @@ class ViewMeasure:
     weights: np.ndarray = field(repr=False)   # N   면적 요소 dA (m²)
     is_colored: np.ndarray = field(repr=False)  # N bool
     cos: np.ndarray = field(repr=False)         # N   cosθ (시선과 법선)
+    shadow_fraction: float = 0.0                # 판정 면적 중 그림자(L* < shadow_max_L) 비율
 
 
 def measure_view(color_bgr: np.ndarray, depth_m: np.ndarray, mask: np.ndarray,
@@ -126,11 +142,13 @@ def measure_view(color_bgr: np.ndarray, depth_m: np.ndarray, mask: np.ndarray,
     colored[vs[keep][col], us[keep][col]] = True
 
     total = dA.sum()
+    dark = lab[keep][:, 0] < p.shadow_max_L
     return ViewMeasure(
         ratio_visible=float((dA * col).sum() / total),
         coverage=float(total / (4 * np.pi * sph.radius ** 2)),
         sphere=sph, n_pixels=int(keep.sum()), colored=colored, valid=valid,
         normals=n[keep], weights=dA, is_colored=col, cos=cos[keep],
+        shadow_fraction=float((dA * dark).sum() / total),
     )
 
 
@@ -214,3 +232,10 @@ def accumulate_views(views: list[InHandView], p: InspectParams, scene_id: int = 
         view_disagreement=disagreement, num_views=len(per_view), variety=p.variety,
     )
 
+
+def standard_grade(ratio: float, p: InspectParams) -> str:
+    """농산물 표준규격 등급 이름 (보고·발표용). 기준을 넘는 가장 높은 등급, 모두 미달이면 '등외'."""
+    for name, th in sorted(p.standard.items(), key=lambda kv: -kv[1]):
+        if ratio >= th:
+            return name
+    return "등외"

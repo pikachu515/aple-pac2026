@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from aple.inspection.coloration import InspectParams, color_ratio
+from aple.inspection.coloration import InspectParams, measure_view, ratio_from_view
 from aple.inspection.grade_classifier import classify
 from aple.schema import (AppleDetection2D, AppleState, GradeResult, InspectionPolicy, LightingStatus,
                          SceneSnapshot)
@@ -26,8 +26,15 @@ def inspect_scene(snap: SceneSnapshot, dets: list[AppleDetection2D], apples: lis
             raise SceneMismatch(f"검출 scene {d.scene_id} ≠ 스냅샷 scene {snap.scene_id}")
     by_det = {d.det_id: d for d in dets}
 
+    def ratio(det, apple_id):
+        """그림자가 많이 진 사과는 착색비율을 내지 않는다 → OCCLUDED(재촬영). 비율을 고치면 치우친다."""
+        vm = measure_view(snap.color, snap.depth_m, det.mask, snap.intrinsics, p)
+        if vm is None or vm.shadow_fraction > p.max_shadow_fraction:
+            return None
+        return ratio_from_view(vm, p, snap.scene_id, apple_id)
+
     if apples is None:
-        return [classify(color_ratio(snap, d, d.det_id, p), p, light=light, policy=policy,
+        return [classify(ratio(d, d.det_id), p, light=light, policy=policy,
                          gripper_range_mm=gripper_range_mm, scene_id=snap.scene_id, apple_id=d.det_id)
                 for d in dets]
 
@@ -36,7 +43,7 @@ def inspect_scene(snap: SceneSnapshot, dets: list[AppleDetection2D], apples: lis
         if a.scene_id != snap.scene_id:
             raise SceneMismatch(f"사과 {a.apple_id} scene {a.scene_id} ≠ 스냅샷 scene {snap.scene_id}")
         det = by_det.get(a.det_id)
-        cr = None if (det is None or a.occluded) else color_ratio(snap, det, a.apple_id, p)
+        cr = None if (det is None or a.occluded) else ratio(det, a.apple_id)
         results.append(classify(cr, p, apple=a, light=light, policy=policy, gripper_range_mm=gripper_range_mm,
                                 scene_id=snap.scene_id, apple_id=a.apple_id))
     return results

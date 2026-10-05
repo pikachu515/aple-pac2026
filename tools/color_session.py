@@ -232,8 +232,13 @@ def cmd_suggest(folder: Path, card: str | None, variety: str | None, apply_to: P
 # ---------------------------------------------------------------- 4. truth
 
 def truth_root(root: Path, calib: CardCalib | None, p: InspectParams) -> tuple[list[dict], dict]:
-    """root/<사과>/snap_*.npz — 첫 장은 자연스럽게 놓인 자세(탑뷰 판정에 쓰는 장), 나머지는 굴려서 다른 면이 위로."""
-    rows = []
+    """root/<사과>/snap_*.npz — 첫 장은 자연스럽게 놓인 자세(탑뷰 판정에 쓰는 장), 나머지는 굴려서 다른 면이 위로.
+
+    자세마다 위를 향한 면이 다르므로 **모든 장이 '탑뷰 하나'의 표본**이다. 사과 5개 × 6자세면 30개 표본으로
+    탑뷰 오차를 잰다 (summary 는 전체 자세 기준). 같은 사과의 자세끼리는 서로 독립이 아니라는 점은 감안한다.
+    반환 rows 는 사과별(첫 장 = 평소 자세), summary["views"] 는 자세별 행이다.
+    """
+    rows, view_rows = [], []
     for d in sorted(x for x in root.iterdir() if x.is_dir() and not x.name.startswith("_")):
         views = []
         for path, raw, depth, intr in load_snaps(d):
@@ -255,12 +260,14 @@ def truth_root(root: Path, calib: CardCalib | None, p: InspectParams) -> tuple[l
         rows.append({"apple": d.name, "views": len(views), "top_ratio": round(float(rat[0]), 3),
                      "full_ratio": round(full, 3), "diff": round(float(rat[0]) - full, 3),
                      "diameter_mm": round(float(np.median([v.sphere.radius for v in views])) * 2000, 1)})
+        view_rows += [{"apple": d.name, "view": i, "top_ratio": round(float(r), 3), "full_ratio": round(full, 3),
+                       "diff": round(float(r) - full, 3)} for i, r in enumerate(rat)]
     if not rows:
         raise SystemExit("처리한 사과가 없다")
-    diffs = np.abs([r["diff"] for r in rows])
+    diffs = np.abs([r["diff"] for r in view_rows])
     p90 = float(np.percentile(diffs, 90))
-    summary = {"apples": len(rows), "mae": float(diffs.mean()), "p90": p90,
-               "suggested_top_view_error": max(0.03, math.ceil(p90 * 100) / 100)}
+    summary = {"apples": len(rows), "samples": len(view_rows), "mae": float(diffs.mean()), "p90": p90,
+               "suggested_top_view_error": max(0.03, math.ceil(p90 * 100) / 100), "views": view_rows}
     return rows, summary
 
 
@@ -268,12 +275,14 @@ def cmd_truth(root: Path, card: str | None, variety: str | None, apply_to: Path 
     p = params(variety)
     rows, s = truth_root(root, find_card(root, card), p)
     write_csv(analysis_dir(root) / "truth.csv", rows)
+    write_csv(analysis_dir(root) / "truth_views.csv", s["views"])     # 자세별 표본 - curve 에도 그대로 쓸 수 있다
     print(f"{'사과':<12}{'뷰':>3}{'탑뷰':>8}{'전표면':>8}{'차이':>8}")
     for r in rows:
         print(f"{r['apple']:<12}{r['views']:>3}{r['top_ratio'] * 100:>7.0f}%{r['full_ratio'] * 100:>7.0f}%{r['diff'] * 100:>+7.0f}%p")
-    print(f"\n사과 {s['apples']}개 - 탑뷰 오차 평균 {s['mae'] * 100:.1f}%p, 90% 지점 {s['p90'] * 100:.1f}%p")
+    print(f"\n사과 {s['apples']}개 x 자세 = 표본 {s['samples']}개 - 탑뷰 오차 평균 {s['mae'] * 100:.1f}%p, "
+          f"90% 지점 {s['p90'] * 100:.1f}%p")
     print(f"제안: configs/varieties.yaml 의 top_view_error: {s['suggested_top_view_error']:.2f}  (현재 {p.top_view_error:.2f})")
-    print(f"CSV: {analysis_dir(root) / 'truth.csv'}")
+    print(f"CSV: {analysis_dir(root) / 'truth.csv'} (사과별), truth_views.csv (자세별 - curve 에 넣으면 표본이 늘어난다)")
     if apply_to is not None:
         print("  적용:", set_config_value(apply_to, "inspection.top_view_error", s["suggested_top_view_error"]).strip())
     return s

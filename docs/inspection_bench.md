@@ -81,6 +81,7 @@ python tools/capture_snapshot.py --out data/snapshots/1006_desk --note "실험�
 1. 사과 5개를 놓고 **s** 2번 (같은 배치 2장)
 2. 사과를 바꿔 가며 반복 → 모든 사과가 한 번 이상 찍히게
 3. **종이에 "사진 번호 — 자리별 사과 번호"를 적는다** (예: `snap_0000, 0001: 위 줄 3·7·12 / 아래 줄 5·9`)
+4. 한 배치는 사과를 움직이지 않고 **5장 이상** 찍어 `data/snapshots/1006_repeat` 에 따로 둔다 → 판정 재현성(⑦)
 
 ## 6. 세션 B — 전표면 정답 사진 (사과당 2분)
 
@@ -122,21 +123,25 @@ python tools/color_session.py card    data/snapshots/1006_desk
 # ② 착색비율·등급 — _analysis/ 의 오버레이 이미지를 꼭 눈으로 본다
 python tools/color_session.py analyze data/snapshots/1006_desk
 
-# ③ 착색 경계 제안 → configs/varieties.yaml 의 hue_range_deg 위쪽 값 교체 → ② 다시
-python tools/color_session.py suggest data/snapshots/1006_desk
+# ③ 착색 경계 제안 → 설정 파일에 바로 반영(--apply) → ② 다시
+python tools/color_session.py suggest data/snapshots/1006_desk --apply
 
-# ④ 전표면 정답 → top_view_error 제안값으로 교체
-python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk/card.json
+# ④ 전표면 정답 → top_view_error 반영
+python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk/card.json --apply
 
 # ⑤ 육안 판정과 비교
 python tools/color_session.py compare data/truth/_analysis/truth.csv --labels data/truth/labels.csv
 
-# ⑥ 리젝트 곡선 → delta_up 제안 + 발표 그래프(_analysis/reject_curve.png)
-python tools/color_session.py curve   data/truth/_analysis/truth.csv --labels data/truth/labels.csv
+# ⑥ 리젝트 곡선 → delta_up 반영(제안값 + 여유 0.03) + 발표 그래프(_analysis/reject_curve.png)
+python tools/color_session.py curve   data/truth/_analysis/truth.csv --labels data/truth/labels.csv --apply
+
+# ⑦ 판정 재현성 — 5절에서 같은 배치로 찍은 장면만 따로 모은 폴더 (사과를 움직이지 않고 5장 이상)
+python tools/color_session.py repeat  data/snapshots/1006_repeat
 ```
 
 **⑥ curve 결과 읽는 법**
-- 제안 `delta_up` 은 "'중→상' 오류 0 중 리젝트가 가장 적은 점"이다. 표본이 적으면 경계에 딱 붙은 값이 나오므로 **제안값에 0.02~0.05 를 더해** 설정한다
+- 제안 `delta_up` 은 "'중→상' 오류 0 중 리젝트가 가장 적은 점"이다. 표본이 적으면 경계에 딱 붙은 값이 나오므로 `--apply` 는 **제안값에 여유 0.03 을 더해** 쓴다 (`--margin` 으로 조절)
+- `--apply` 로 바뀐 줄은 주석의 `[임시]` 가 `[실측 날짜]` 로 바뀐다. `git diff configs/varieties.yaml` 로 확인 후 PR
 - `[중요] 탑뷰만으로는 '중→상' 오류를 ... 만들 수 없다` 가 나오면, 윗면만 빨간 사과가 있다는 뜻이다. 그 사과 이름이 함께 출력된다 → 다면 검사(모드 B)가 필요한 근거이므로 사진과 함께 기록해 둔다
 
 **오버레이 보는 법** — 빨강 = 착색으로 판정, 파랑 = 비착색, 칠해지지 않은 가장자리 = 비스듬해서 판정 제외
@@ -178,5 +183,6 @@ python tools/judge_live.py --near 150 --far 1200 --card-roi <카드 x,y,w,h>
 - [ ] `data/snapshots/…`, `data/truth/…` 폴더를 공유 드라이브 `snapshots/` 에 업로드 (역할 A도 검출 학습에 쓴다)
 - [ ] `configs/varieties.yaml` 의 `hue_range_deg`, `top_view_error`, `delta_up` 을 바꿔 PR (`[임시]` 표시 지우기)
 - [ ] `_analysis/reject_curve.png` 와 오버레이 몇 장을 공유 드라이브 `videos/`(발표 자료)에 올리기
+- [ ] `python tools/make_figures.py` → `data/figures/` 의 설계 근거 그림 6장도 함께 (기울기 보정, 커버리지, 회색 카드, 리젝트 곡선, 그림자, 다면 검사)
 - [ ] Notion 실험 로그: 사과 수, 제안값, 일치율(⑤), 조명 실험 ΔE
 - [ ] `systemctl --user start piper-rsd`

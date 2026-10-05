@@ -156,6 +156,23 @@ python tools/color_session.py curve   data/truth/_analysis/truth.csv --labels da
 3. 새 카드값으로 다시: `card data/snapshots/1006_lamp` → `analyze data/snapshots/1006_lamp`
    → 원래 값으로 돌아오는지 확인 (회색 카드 보정의 효과 = 발표 근거)
 
+## 9-1. Piper Studio 를 켠 채로 판정 (대회 연결 경로 확인)
+
+1~9절은 Piper Studio 를 끄고 D435 를 직접 열었다. 대회에서는 Piper Studio 가 켜진 상태에서 판정하므로,
+**같은 사과로 이 경로가 같은 결과를 내는지** 마지막에 확인한다.
+
+```bash
+systemctl --user start piper-rsd               # Piper Studio 카메라 다시 켜기
+# Piper Studio 화면: D435 켜기 → 회색 카드 보정 → 카메라 프로파일 저장
+#                    카메라 설정에서 깊이 인코딩 창(near/far) 값 확인
+python tools/judge_live.py --near 150 --far 1200 --card-roi <카드 x,y,w,h>
+```
+
+- 창에 사과마다 착색비율·등급이 실시간으로 뜬다. **s** = 현재 장면 저장(`data/live/`), **q** = 종료
+- 5절에서 직접 찍은 결과와 등급이 같으면 대회 연결 경로가 검증된 것이다
+- 다르면 `data/live/` 스냅샷을 `color_session.py analyze data/live` 로 다시 분석해 원인(깊이 정렬, 색 보정)을 찾는다
+- 시작할 때 `깊이→컬러 보정 파일이 없다` 가 나오면 2절의 `--save-calib` 을 먼저 한다
+
 ## 10. 정리
 
 - [ ] `data/snapshots/…`, `data/truth/…` 폴더를 공유 드라이브 `snapshots/` 에 업로드 (역할 A도 검출 학습에 쓴다)

@@ -31,7 +31,7 @@ def main() -> int:
 
     devs = rs.context().query_devices()
     if len(devs) == 0:
-        print("[FAIL] RealSense 장치가 없다 — 케이블·포트 확인, lsusb 로 인식 여부 확인")
+        print("[FAIL] RealSense 장치가 없다 - 케이블·포트 확인, lsusb 로 인식 여부 확인")
         return 1
 
     ok = True
@@ -43,7 +43,7 @@ def main() -> int:
     print(f"펌웨어   : {info(dev, rs.camera_info.firmware_version)}")
     print(f"USB      : {usb}")
     if usb.startswith("2"):
-        print("[FAIL] USB 2.0으로 협상됨 — USB 3.x 케이블·포트로 교체 (깊이 스트림 제한)")
+        print("[FAIL] USB 2.0으로 협상됨 - USB 3.x 케이블·포트로 교체 (깊이 스트림 제한)")
         ok = False
 
     cfg = rs.config()
@@ -75,7 +75,7 @@ def main() -> int:
         pipe.stop()
 
     if n == 0:
-        print("[FAIL] 프레임을 받지 못했다 — 케이블 재연결, Piper Studio 카메라 데몬(piper-rsd) 중지 여부 확인")
+        print("[FAIL] 프레임을 받지 못했다 - 케이블 재연결, Piper Studio 카메라 데몬(piper-rsd) 중지 여부 확인")
         return 1
 
     print(f"스트림   : {args.width}x{args.height} 컬러+깊이, 실측 {fps:.1f} fps (목표 {args.fps})")
@@ -83,7 +83,7 @@ def main() -> int:
     if center:
         print(f"중앙 거리: {np.median(center):.0f} mm")
     if fps < args.fps * 0.9:
-        print("[FAIL] fps 미달 — USB 대역폭·컨트롤러 배치 확인 (S2-7)")
+        print("[FAIL] fps 미달 - USB 대역폭·컨트롤러 배치 확인 (S2-7)")
         ok = False
 
     print("[OK] 점검 통과" if ok else "[FAIL] 점검 실패 항목 있음")

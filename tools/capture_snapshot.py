@@ -91,7 +91,7 @@ def main() -> None:
     dev = profile.get_device()
     usb = dev.get_info(rs.camera_info.usb_type_descriptor) if dev.supports(rs.camera_info.usb_type_descriptor) else "?"
     if usb.startswith("2"):
-        print(f"[경고] USB {usb} 로 연결됨 — USB 3 케이블·포트로 바꾸지 않으면 깊이가 불안정하다")
+        print(f"[경고] USB {usb} 로 연결됨 - USB 3 케이블·포트로 바꾸지 않으면 깊이가 불안정하다")
     color_sensor = dev.first_color_sensor()
     scale = dev.first_depth_sensor().get_depth_scale()
     intr = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()

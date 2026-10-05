@@ -89,8 +89,13 @@ class _Profile:
         return _Device()
 
     def get_stream(self, s):
-        intr = types.SimpleNamespace(fx=INTR[0], fy=INTR[1], ppx=INTR[2], ppy=INTR[3])
-        return types.SimpleNamespace(as_video_stream_profile=lambda: types.SimpleNamespace(get_intrinsics=lambda: intr))
+        intr = types.SimpleNamespace(fx=INTR[0], fy=INTR[1], ppx=INTR[2], ppy=INTR[3], width=640, height=480,
+                                     model="brown_conrady", coeffs=[0.0] * 5)
+        # 깊이→컬러: x 로 +15 mm 이동, 회전 없음 (열 우선 9개 값)
+        ext = types.SimpleNamespace(rotation=[1, 0, 0, 0, 1, 0, 0, 0, 1], translation=[0.015, 0.0, 0.0])
+        return types.SimpleNamespace(
+            as_video_stream_profile=lambda: types.SimpleNamespace(get_intrinsics=lambda: intr),
+            get_extrinsics_to=lambda other: ext)
 
 
 class pipeline:

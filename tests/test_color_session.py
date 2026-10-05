@@ -152,3 +152,41 @@ def test_curve_command_writes_graph_and_suggestion(truth, tmp_path, use_labels):
     assert out["chosen"].up_error_rate == pytest.approx(1 / 3)
     assert (root / "_analysis" / "curve.csv").exists()
     assert (root / "_analysis" / "reject_curve.png").exists()
+
+
+def test_rs_check_saves_depth_to_color_calibration(tmp_path, monkeypatch):
+    import sys
+
+    from aple.hal.depth_align import D435Calib
+    from tests import fake_realsense
+    monkeypatch.setitem(sys.modules, "pyrealsense2", fake_realsense)
+    sys.modules.pop("tools.rs_check", None)
+    from tools import rs_check
+    out = tmp_path / "calib" / "d435.json"
+    monkeypatch.setattr(sys, "argv", ["rs_check.py", "--seconds", "0.05", "--save-calib", str(out)])
+    clock = iter(i * 0.01 for i in range(100_000))
+    monkeypatch.setattr(rs_check.time, "time", lambda: next(clock))
+    assert rs_check.main() == 0
+    calib = D435Calib.load(out)                                   # 정렬 모듈이 그대로 읽는다
+    assert np.allclose(calib.R, np.eye(3)) and np.allclose(calib.t, [0.015, 0, 0])
+
+
+def test_rs_check_converts_column_major_rotation(monkeypatch):
+    """librealsense rotation 은 열 우선 — 비대칭 회전으로 전치가 맞는지 확인."""
+    import sys
+    import types
+
+    from tests import fake_realsense
+    monkeypatch.setitem(sys.modules, "pyrealsense2", fake_realsense)
+    sys.modules.pop("tools.rs_check", None)
+    from tools import rs_check
+    rs_check.rs = fake_realsense
+    Rz = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])      # z 축 90°
+    col_major = Rz.T.ravel().tolist()                                         # 열 우선으로 펼친 값
+    ext = types.SimpleNamespace(rotation=col_major, translation=[0.0, 0.0, 0.0])
+    intr = types.SimpleNamespace(fx=1, fy=1, ppx=0, ppy=0, width=1, height=1)
+    stream = types.SimpleNamespace(get_extrinsics_to=lambda o: ext,
+                                   as_video_stream_profile=lambda: types.SimpleNamespace(get_intrinsics=lambda: intr))
+    profile = types.SimpleNamespace(get_stream=lambda s: stream)
+    calib = rs_check.read_calib(profile, "x", 0.001)
+    assert np.allclose(np.reshape(calib["depth_to_color"]["R"], (3, 3)), Rz)

@@ -41,6 +41,13 @@ python tools/rs_check.py                 # USB 3.2, 30 fps 근처, [OK] 가 나�
 ```
 
 - `USB 2.1` 이 나오면 케이블·포트를 바꾼다 (깊이가 불안정해진다)
+- **처음 한 번만**: 깊이→컬러 보정값을 저장한다 (Piper Studio 영상을 쓸 때 필요 — `docs/piper_studio_integration.md`)
+
+```bash
+python tools/rs_check.py --save-calib configs/calib/d435.json
+```
+
+  저장된 파일은 PR 로 올린다 (장치 고유 상수, 비밀 정보 아님)
 - 실험이 끝나면 `systemctl --user start piper-rsd` 로 되돌린다
 
 ## 3. 배치

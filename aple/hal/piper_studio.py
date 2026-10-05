@@ -21,7 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
-from aple.schema import ArmCommand
+from aple.schema import ArmCommand, LightingStatus, SceneSnapshot
 
 JOINT_NAMES = tuple(f"joint{index}" for index in range(1, 7))
 PIPER_WEB_FIXED_GRIPPER_EFFORT = 1000
@@ -29,6 +29,10 @@ PIPER_WEB_FIXED_GRIPPER_EFFORT = 1000
 
 class PiperWebError(RuntimeError):
     """A Piper Web request failed or the requested operation is unsupported."""
+
+
+SnapshotProvider = Callable[..., SceneSnapshot]
+LightingStatusProvider = Callable[..., LightingStatus]
 
 
 class _EstopKeepAlive:
@@ -90,7 +94,14 @@ class _EstopKeepAlive:
 class PiperStudio:
     """Synchronous client for the Piper Web v0.5.9 jog API."""
 
-    def __init__(self, cfg: dict, *, opener=None) -> None:
+    def __init__(
+        self,
+        cfg: dict,
+        *,
+        opener=None,
+        snapshot_provider: SnapshotProvider | None = None,
+        lighting_status_provider: LightingStatusProvider | None = None,
+    ) -> None:
         self.cfg = cfg["piper_web"]
         self._enabled = self.cfg.get("enabled", False)
         self._base_url = str(self.cfg["base_url"]).rstrip("/")
@@ -111,6 +122,8 @@ class PiperStudio:
             self.cfg["gripper_arrival_tolerance"], "piper_web.gripper_arrival_tolerance"
         )
         self._joint_limits_deg = self.cfg["joint_limits_deg"]
+        self._snapshot_provider = snapshot_provider
+        self._lighting_status_provider = lighting_status_provider
         self._opener = opener or build_opener(HTTPCookieProcessor(CookieJar()))
         self._authenticated = False
         self._auth_status_enabled: bool | None = None
@@ -138,10 +151,53 @@ class PiperStudio:
         return self._read_joint_state()
 
     def snapshot(self, *args, **kwargs):
-        raise PiperWebError("Piper Web v0.5.9 camera snapshot adapter is not implemented")
+        if self._snapshot_provider is None:
+            raise PiperWebError(
+                "Piper Web v0.5.9 exposes color JPEG preview only; provide a frame "
+                "source for aligned depth and camera intrinsics before requesting SceneSnapshot"
+            )
+        result = self._snapshot_provider(*args, **kwargs)
+        if not isinstance(result, SceneSnapshot):
+            raise PiperWebError("snapshot provider must return a SceneSnapshot")
+        return result
 
-    def lighting_status(self):
-        raise PiperWebError("Piper Web v0.5.9 lighting-status adapter is not implemented")
+    def lighting_status(self, *args, **kwargs):
+        if self._lighting_status_provider is None:
+            raise PiperWebError(
+                "Piper Web v0.5.9 exposes raw light metrics only; provide a "
+                "calibration-aware LightingStatus provider"
+            )
+        result = self._lighting_status_provider(*args, **kwargs)
+        if not isinstance(result, LightingStatus):
+            raise PiperWebError("lighting-status provider must return LightingStatus")
+        return result
+
+    def camera_preview_jpeg(self, camera_id: str | None = None) -> bytes:
+        """Fetch one JPEG preview without claiming it is a synchronized scene."""
+        self._require_enabled()
+        self._ensure_authenticated(require_control=False)
+        selected_id = camera_id or self.cfg.get("camera_id")
+        if not isinstance(selected_id, str) or not selected_id.strip():
+            raise PiperWebError("Set piper_web.camera_id to a registered Piper Web camera")
+        payload, content_type = self._request_bytes(
+            "GET", f"/api/cameras/{quote(selected_id, safe='')}/preview"
+        )
+        if content_type.split(";", 1)[0].strip().lower() != "image/jpeg":
+            raise PiperWebError(
+                f"Piper Web camera preview returned unexpected content type: {content_type}"
+            )
+        if not payload:
+            raise PiperWebError("Piper Web returned an empty camera preview")
+        return payload
+
+    def camera_light_metrics(self) -> dict[str, Any]:
+        """Return Piper Web's raw per-camera light measurements."""
+        self._require_enabled()
+        self._ensure_authenticated(require_control=False)
+        result = self._request("GET", "/api/cameras/light")
+        if not isinstance(result, dict):
+            raise PiperWebError("Piper Web returned an invalid camera-light payload")
+        return result
 
     def send_joint_goal(self, position_rad: tuple[float, ...], timeout_s: float) -> None:
         """Send one absolute six-joint goal through the protected jog session."""
@@ -149,6 +205,24 @@ class PiperStudio:
         self._require_robotd_safety_confirmation()
         target = self._normalize_joint_target(position_rad)
         self._move_to_normalized(target, timeout_s)
+
+    def send_joint_trajectory(
+        self,
+        points_rad: tuple[tuple[float, ...], ...],
+        timeout_s: float,
+    ) -> None:
+        """Send ordered joint waypoints in one protected jog session.
+
+        Piper Web v0.5.9 does not expose per-goal speed, so this method only
+        sequences acknowledged waypoints; it does not promise continuous or
+        speed-scaled motion.
+        """
+        self._require_enabled()
+        self._require_robotd_safety_confirmation()
+        if not points_rad:
+            raise ValueError("points_rad must contain at least one joint waypoint")
+        targets = tuple(self._normalize_joint_target(point) for point in points_rad)
+        self._move_sequence_to_normalized(targets, timeout_s)
 
     def send(self, cmd: ArmCommand) -> None:
         """Send a measured joint pose and calibrated gripper width through web jog."""
@@ -212,6 +286,13 @@ class PiperStudio:
         )
 
     def _move_to_normalized(self, target: dict[str, float], timeout_s: float) -> None:
+        self._move_sequence_to_normalized((target,), timeout_s)
+
+    def _move_sequence_to_normalized(
+        self,
+        targets: tuple[dict[str, float], ...],
+        timeout_s: float,
+    ) -> None:
         timeout_s = self._positive_number(timeout_s, "timeout_s")
         with self._lock:
             self._ensure_authenticated(require_control=True)
@@ -229,35 +310,38 @@ class PiperStudio:
                         or start_result.get("running") is not True
                         or start_result.get("iface") != self._iface):
                     raise PiperWebError("Piper Web did not confirm ownership of the jog session")
-                goal_result = self._request(
-                    "POST", "/api/robots/jog/goal",
-                    {"iface": self._iface, "values": target},
-                )
-                if not isinstance(goal_result, dict) or goal_result.get("status") != "ok":
-                    raise PiperWebError("Piper Web did not confirm the joint goal")
                 deadline = time.monotonic() + timeout_s
-                target_rad = self._denormalize_joint_target(target)
-                while True:
-                    keepalive.check()
-                    current, gripper_position = self._read_raw_state()
-                    joints_reached = all(
-                        abs(actual - expected) <= self._arrival_tolerance_rad
-                        for actual, expected in zip(current, target_rad)
+                for target in targets:
+                    goal_result = self._request(
+                        "POST", "/api/robots/jog/goal",
+                        {"iface": self._iface, "values": target},
                     )
-                    target_gripper = target.get("gripper")
-                    gripper_reached = (
-                        target_gripper is None
-                        or abs(gripper_position - target_gripper) <= self._gripper_arrival_tolerance
-                    )
-                    if joints_reached and gripper_reached:
+                    if not isinstance(goal_result, dict) or goal_result.get("status") != "ok":
+                        raise PiperWebError("Piper Web did not confirm the joint goal")
+                    target_rad = self._denormalize_joint_target(target)
+                    while True:
                         keepalive.check()
-                        return
-                    if time.monotonic() >= deadline:
-                        raise PiperWebError(
-                            f"Timed out waiting for Piper Web follower {self._iface!r} "
-                            "to reach the joint goal"
+                        current, gripper_position = self._read_raw_state()
+                        joints_reached = all(
+                            abs(actual - expected) <= self._arrival_tolerance_rad
+                            for actual, expected in zip(current, target_rad)
                         )
-                    time.sleep(min(self._poll_interval_s, max(0.0, deadline - time.monotonic())))
+                        target_gripper = target.get("gripper")
+                        gripper_reached = (
+                            target_gripper is None
+                            or abs(gripper_position - target_gripper)
+                            <= self._gripper_arrival_tolerance
+                        )
+                        if joints_reached and gripper_reached:
+                            keepalive.check()
+                            break
+                        remaining_s = deadline - time.monotonic()
+                        if remaining_s <= 0:
+                            raise PiperWebError(
+                                f"Timed out waiting for Piper Web follower {self._iface!r} "
+                                "to reach the joint goal sequence"
+                            )
+                        time.sleep(min(self._poll_interval_s, remaining_s))
             except Exception as exc:
                 operation_error = exc
                 raise
@@ -459,6 +543,23 @@ class PiperStudio:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PiperWebError(f"Piper Web {method} {path} returned invalid JSON") from exc
 
+    def _request_bytes(self, method: str, path: str) -> tuple[bytes, str]:
+        request = Request(
+            f"{self._base_url}{path}",
+            headers={"Accept": "image/jpeg"},
+            method=method,
+        )
+        try:
+            with self._opener.open(request, timeout=self._request_timeout_s) as response:
+                return response.read(), response.headers.get("Content-Type", "")
+        except HTTPError as exc:
+            detail = exc.read(4096).decode("utf-8", errors="replace")
+            raise PiperWebError(
+                f"Piper Web {method} {path} returned HTTP {exc.code}: {detail}"
+            ) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise PiperWebError(f"Piper Web {method} {path} request failed: {exc}") from exc
+
     @staticmethod
     def _positive_number(value: Any, name: str) -> float:
         try:
@@ -468,3 +569,102 @@ class PiperStudio:
         if not math.isfinite(result) or result <= 0:
             raise ValueError(f"{name} must be a positive finite number")
         return result
+
+
+class PiperStudioMotionTransport:
+    """Speed-aware motion transport built on top of PiperStudio.
+
+    Piper Web v0.5.9 does not expose per-goal speed control, so this transport
+    approximates deceleration by subdividing joint motion into smaller waypoint
+    steps when a lower speed_scale is requested. The actual robotd runtime still
+    decides the final servo profile, so simulation is required before treating
+    this as a verified slowdown contract.
+    """
+
+    def __init__(
+        self,
+        studio: PiperStudio,
+        *,
+        max_joint_step_rad: float,
+        tool_pose_provider: Callable[[tuple[float, ...]], Any] | None = None,
+        in_hand_capture_provider: Callable[..., Any] | None = None,
+    ) -> None:
+        self._studio = studio
+        self._tool_pose_provider = tool_pose_provider
+        self._in_hand_capture_provider = in_hand_capture_provider
+        self._max_joint_step_rad = PiperStudio._positive_number(
+            max_joint_step_rad, "max_joint_step_rad"
+        )
+
+    def joint_state(self) -> tuple[float, ...]:
+        return self._studio.joint_state()
+
+    def move_joint_goal(
+        self,
+        position_rad: tuple[float, ...],
+        *,
+        speed_scale: float,
+        timeout_s: float,
+    ) -> bool:
+        waypoints = self._build_waypoints(position_rad, speed_scale=speed_scale)
+        if len(waypoints) == 1:
+            self._studio.send_joint_goal(position_rad, timeout_s)
+        else:
+            self._studio.send_joint_trajectory(waypoints, timeout_s)
+        return True
+
+    def set_gripper_width(
+        self, width_m: float, effort: int, *, timeout_s: float
+    ) -> bool:
+        del timeout_s
+        joints = self._studio.joint_state()
+        self._studio.send(ArmCommand(joints, width_m, effort, "scripted"))
+        return True
+
+    def tool_pose(self):
+        """Forward kinematics of the measured joints via the injected provider (base_link, m)."""
+        if self._tool_pose_provider is None:
+            raise PiperWebError(
+                "Provide a tool_pose_provider (e.g. Piper forward kinematics); "
+                "Piper Web v0.5.9 does not report a TCP pose"
+            )
+        return self._tool_pose_provider(self._studio.joint_state())
+
+    def capture_in_hand(self, apple_id: int, view_index: int, *, timeout_s: float):
+        if self._in_hand_capture_provider is None:
+            raise PiperWebError(
+                "Provide an in_hand_capture_provider returning aligned color/depth "
+                "and intrinsics; Piper Web v0.5.9 preview is JPEG only"
+            )
+        return self._in_hand_capture_provider(
+            apple_id, view_index, self._studio.joint_state(), timeout_s=timeout_s
+        )
+
+    def _build_waypoints(
+        self,
+        target_rad: tuple[float, ...],
+        *,
+        speed_scale: float,
+    ) -> tuple[tuple[float, ...], ...]:
+        if len(target_rad) != len(JOINT_NAMES):
+            raise ValueError("joint_target_rad must contain exactly six joint angles")
+        target = tuple(float(value) for value in target_rad)
+        if not all(math.isfinite(value) for value in target):
+            raise ValueError("joint_target_rad must contain only finite values")
+        if not math.isfinite(speed_scale) or not 0 < speed_scale <= 1:
+            raise ValueError("speed_scale must be finite and in (0, 1]")
+
+        current = self._studio.joint_state()
+        max_delta = max(abs(end - start) for start, end in zip(current, target))
+        if max_delta == 0:
+            return (target,)
+        effective_step = max(self._max_joint_step_rad * speed_scale, 1e-6)
+        segment_count = max(1, math.ceil(max_delta / effective_step))
+        waypoints = []
+        for index in range(1, segment_count + 1):
+            fraction = index / segment_count
+            waypoint = tuple(
+                start + (end - start) * fraction for start, end in zip(current, target)
+            )
+            waypoints.append(waypoint)
+        return tuple(waypoints)

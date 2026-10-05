@@ -1,4 +1,4 @@
-"""Read the calibrated gripper effort selected by the grasp profile."""
+"""Fixed-effort grasp profiles and optional force-feedback utilities."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class GraspFeedback:
 
 
 def effort_for(profile: GraspProfile) -> int:
-    """Return the profile's calibrated actuator effort."""
+    """Return the actuator effort selected by the grasp profile."""
     if isinstance(profile.effort, bool) or not isinstance(profile.effort, int):
         raise ValueError("profile.effort must be an integer")
     if not 0 <= profile.effort <= 5000:

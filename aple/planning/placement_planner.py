@@ -12,9 +12,21 @@ from __future__ import annotations
 
 import math
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from aple.schema import AppleState, BoxOccupancy, GradeResult, PlacementPlan
+
+
+@dataclass(frozen=True)
+class PlacementVerification:
+    """적재 검증 결과 (S7-7). schema 변경 전까지 PlacementPlanner 로컬 타입으로 둔다."""
+    box_id: int
+    cell_index: int
+    verified: bool          # False 면 측정 무효 → 예약 유지, success/rolled_out 판단 보류
+    success: bool
+    rolled_out: bool
+    height_delta_m: float
+    settle_error_m: float   # 기대 높이 증가량(직경) 대비 실측 오차, 무효면 nan
 
 
 class PlacementPlanner:
@@ -23,8 +35,15 @@ class PlacementPlanner:
         self.reserved: set[tuple[int, int]] = set()   # (box_id, cell_index)
         self._last_valid_boxes: dict[int, BoxOccupancy] = {}
 
-    def plan(self, apple: AppleState, grade: GradeResult, boxes: list[BoxOccupancy]) -> PlacementPlan:
-        if grade.scene_id > apple.scene_id:
+    def plan(
+        self,
+        apple: AppleState,
+        grade: GradeResult,
+        boxes: list[BoxOccupancy],
+        *,
+        allow_newer_grade: bool = False,
+    ) -> PlacementPlan:
+        if grade.scene_id > apple.scene_id and not allow_newer_grade:
             raise ValueError("grade cannot come from a newer scene than the apple")
         if not grade.final:
             raise ValueError("cannot plan placement before the grade is final")
@@ -130,3 +149,32 @@ class PlacementPlanner:
 
     def release(self, box_id: int, cell_index: int) -> None:
         self.reserved.discard((box_id, cell_index))
+
+    def verify(
+        self,
+        plan: PlacementPlan,
+        apple: AppleState,
+        before: BoxOccupancy,
+        after: BoxOccupancy,
+    ) -> PlacementVerification:
+        """적재 전후 칸 높이 변화로 안착/이탈 판정. 무효 측정이면 예약을 유지한다."""
+        box_id, cell = int(plan.box_id), plan.cell_index
+        invalid = PlacementVerification(box_id, cell, False, False, False, math.nan, math.nan)
+        if not plan.feasible or cell < 0 or not (before.valid and after.valid):
+            return invalid
+        if len(before.heights_m) != len(after.heights_m) or cell >= len(after.heights_m):
+            return invalid
+        tol_m = float(self.cfg["execution"]["placement_verify"]["height_tol_m"])
+        if not math.isfinite(tol_m) or tol_m < 0:
+            raise ValueError("execution.placement_verify.height_tol_m must be finite and non-negative")
+        deltas = [a - b for a, b in zip(after.heights_m, before.heights_m)]
+        if not all(math.isfinite(d) for d in deltas):
+            return invalid
+        delta = deltas[cell]
+        error = delta - apple.diameter_m
+        success = abs(error) <= tol_m
+        others_changed = any(d > tol_m for i, d in enumerate(deltas) if i != cell)
+        rolled_out = (not success) and abs(delta) <= tol_m and others_changed
+        if success or rolled_out:
+            self.release(box_id, cell)
+        return PlacementVerification(box_id, cell, True, success, rolled_out, delta, error)

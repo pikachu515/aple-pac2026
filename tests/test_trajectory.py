@@ -1,9 +1,11 @@
 """Tests for fail-closed Cartesian-to-joint trajectory planning."""
 
+import numpy as np
 import pytest
 
 from aple.execution.trajectory import (
     JointTrajectoryPlanner,
+    PiperKinematicsIKSolver,
     ToolPose,
     TrajectoryPlanningError,
 )
@@ -123,3 +125,50 @@ def test_planner_requires_collision_validator_and_valid_limits():
                               max_joint_step_rad=0.1)
     with pytest.raises(ValueError, match="positive"):
         planner(max_step=0.0)
+
+
+def test_piper_ik_adapter_converts_pose_and_passes_seed():
+    calls = []
+
+    def ik(target, seed):
+        calls.append((target.copy(), seed.copy()))
+        return {"ok": True, "q": (0.1, 0.2, 0.3, 0.4, 0.5, 0.6)}
+
+    solver = PiperKinematicsIKSolver(ik)
+    result = solver.solve(
+        ToolPose((0.3, -0.2, 0.4), (0.0, 0.0, 2**-0.5, 2**-0.5)),
+        (0.0, 0.1, 0.2, 0.3, 0.4, 0.5),
+    )
+
+    target, seed = calls[0]
+    assert target[:3, 3] == pytest.approx((0.3, -0.2, 0.4))
+    np.testing.assert_allclose(
+        target[:3, :3],
+        ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+        atol=1e-12,
+    )
+    assert seed == pytest.approx((0.0, 0.1, 0.2, 0.3, 0.4, 0.5))
+    assert result == pytest.approx((0.1, 0.2, 0.3, 0.4, 0.5, 0.6))
+
+
+def test_piper_ik_adapter_returns_no_solution_without_fabricating_joints():
+    solver = PiperKinematicsIKSolver(
+        lambda _target, _seed: {"ok": False, "q": (0.0,) * 6}
+    )
+
+    assert solver.solve(pose(0.1), (0.0,) * 6) is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"ok": True},
+        {"ok": True, "q": (0.0,) * 5},
+        {"ok": True, "q": (0.0, 0.0, 0.0, 0.0, 0.0, float("nan"))},
+    ],
+)
+def test_piper_ik_adapter_rejects_invalid_success_payloads(result):
+    solver = PiperKinematicsIKSolver(lambda _target, _seed: result)
+
+    with pytest.raises(RuntimeError, match="Piper IK"):
+        solver.solve(pose(0.1), (0.0,) * 6)

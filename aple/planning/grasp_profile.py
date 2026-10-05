@@ -10,7 +10,7 @@ GRAVITY_M_S2 = 9.80665
 
 
 def select(apple: AppleState, cfg: dict) -> GraspProfile:
-    """Select a size profile and require calibrated force limits for execution."""
+    """Select a size profile using the configured gripper control mode."""
     diameter_m = float(apple.diameter_m)
     if not math.isfinite(diameter_m) or diameter_m <= 0:
         raise ValueError("apple.diameter_m must be a finite positive value")
@@ -21,9 +21,14 @@ def select(apple: AppleState, cfg: dict) -> GraspProfile:
         raise ValueError("size_bins.gripper_range_mm must be an increasing [min, max] pair")
 
     gripper_cfg = cfg["execution"]["gripper"]
+    control_mode = gripper_cfg.get("control_mode", "calibrated_force")
     effort = gripper_cfg["fixed_effort"]
     if isinstance(effort, bool) or not isinstance(effort, int) or not 0 <= effort <= 5000:
         raise ValueError("execution.gripper.fixed_effort must be an integer from 0 to 5000")
+    if control_mode not in ("fixed_effort", "calibrated_force"):
+        raise ValueError(
+            "execution.gripper.control_mode must be 'fixed_effort' or 'calibrated_force'"
+        )
     effort_limit = cfg.get("safety", {}).get("gripper_effort_max")
     if effort_limit is not None and (
         isinstance(effort_limit, bool)
@@ -79,6 +84,31 @@ def select(apple: AppleState, cfg: dict) -> GraspProfile:
     height_offset_mm = float(selected_bin["grasp_height_offset_mm"])
     if not math.isfinite(height_offset_mm):
         raise ValueError("size-bin grasp_height_offset_mm must be finite")
+
+    if control_mode == "fixed_effort":
+        if effort_limit is None or effort > effort_limit:
+            return GraspProfile(
+                scene_id=apple.scene_id,
+                apple_id=apple.apple_id,
+                size_bin=selected_index,
+                est_mass_kg=mass_kg,
+                open_width_m=open_width_m,
+                grasp_height_offset_m=height_offset_mm / 1000.0,
+                grasp_force_n=0.0,
+                effort=effort,
+                feasible=False,
+            )
+        return GraspProfile(
+            scene_id=apple.scene_id,
+            apple_id=apple.apple_id,
+            size_bin=selected_index,
+            est_mass_kg=mass_kg,
+            open_width_m=open_width_m,
+            grasp_height_offset_m=height_offset_mm / 1000.0,
+            grasp_force_n=0.0,
+            effort=effort,
+            feasible=True,
+        )
 
     calibrated_force = _calibrated_force(size_cfg, mass_kg)
     if calibrated_force is None:

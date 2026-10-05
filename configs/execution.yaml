@@ -3,21 +3,25 @@ execution:
   default_backend: scripted     # scripted | act — 2일차 04:00 성공률 비교 후 결정
   act: {task_text: "Pick the apple and place it in the box", timeout_s: 30.0}
   soft_landing: {final_descent_m: 0.03, slow_speed_scale: 0.1}
+  placement_verify: {height_tol_m: 0.010}   # PLACEHOLDER: 깊이 노이즈 실측 후 교체
+  trajectory: {max_joint_step_rad: 0.05} # 라디안 단위 초기값, Piper/SIM 구간 검증 후 조정
   timeouts: {named_pose_s: 20.0, phase_a_s: 30.0, phase_b_s: 15.0, inspect_s: 30.0}
   gripper:
+    control_mode: fixed_effort
     close_speed: null
     slip_width_m: 0.002
     opening_margin_m: 0.005    # 초기값: 사과 직경보다 5 mm 여유
-    fixed_effort: 1000         # 초기 실험값 — 사과를 관찰하며 수동 조정 후 고정
+    fixed_effort: 1000         # Piper Web v0.5.9 고정 토크
 piper_web:
   enabled: false               # 실기 연결은 안전 설정과 follower iface 확인 후 명시적으로 활성화
   base_url: "http://127.0.0.1:8000"
-  iface: null                  # Piper Web에 등록된 follower 이름
+  iface: "PLACEHOLDER_follower"  # PLACEHOLDER: 시뮬/실행 전 Piper Web 등록 follower 이름으로 교체
   request_timeout_s: 3.0
   goal_timeout_s: 20.0
   poll_interval_s: 0.1
   arrival_tolerance_rad: 0.017453292519943295
   gripper_arrival_tolerance: 2.0
+  camera_id: "PLACEHOLDER_d435"  # PLACEHOLDER: 시뮬/실행 전 실제 D435 camera id로 교체
   robotd_safety_confirmed: false
   joint_limits_deg:
     joint1: [-150, 150]
@@ -26,4 +30,4 @@ piper_web:
     joint4: [-100, 100]
     joint5: [-65, 65]
     joint6: [-120, 120]
-  gripper_width_range_m: null  # 실측한 [닫힘 폭, 열림 폭]을 설정해야 그리퍼 명령 가능
+  gripper_width_range_m: [0.0, 0.07]  # PLACEHOLDER: 시뮬/실행 전 실측 [닫힘, 열림] 폭으로 교체

@@ -7,8 +7,12 @@ robot commands; a robot backend must provide IK and segment-safety validation.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Protocol, Sequence
+
+import numpy as np
 
 from aple.schema import FailureCode
 
@@ -39,6 +43,12 @@ class TrajectoryPlanningError(RuntimeError):
     def __init__(self, failure_code: FailureCode, message: str) -> None:
         super().__init__(message)
         self.failure_code = failure_code
+
+
+class PiperIKFunction(Protocol):
+    def __call__(
+        self, target: np.ndarray, seed: np.ndarray
+    ) -> Mapping[str, object]: ...
 
 
 class JointTrajectoryPlanner:
@@ -163,3 +173,57 @@ class JointTrajectoryPlanner:
         if not math.isfinite(result) or result <= 0:
             raise ValueError(f"{name} must be finite and positive")
         return result
+
+
+class PiperKinematicsIKSolver:
+    """Adapt Piper Studio's shared numerical IK function to ``IKSolver``."""
+
+    def __init__(self, ik_function: PiperIKFunction | None = None) -> None:
+        self._ik_function = (
+            ik_function if ik_function is not None else self._load_ik_function()
+        )
+
+    def solve(self, pose: ToolPose, seed_rad: JointVector) -> JointVector | None:
+        JointTrajectoryPlanner._validate_pose(pose, 0)
+        seed = JointTrajectoryPlanner._validate_joints(seed_rad, "seed_rad")
+        target = np.eye(4, dtype=float)
+        x, y, z, w = pose.orientation_xyzw
+        target[:3, :3] = (
+            (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+            (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+            (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
+        )
+        target[:3, 3] = pose.position_m
+
+        result = self._ik_function(target, np.asarray(seed, dtype=float))
+        if not isinstance(result, Mapping):
+            raise RuntimeError("Piper IK returned a non-mapping result")
+        if result.get("ok") is not True:
+            return None
+        if "q" not in result:
+            raise RuntimeError("Piper IK reported success without a joint solution")
+
+        joints = np.asarray(result["q"], dtype=float)
+        if joints.shape != (6,) or not np.isfinite(joints).all():
+            raise RuntimeError("Piper IK returned an invalid six-joint solution")
+        return (
+            float(joints[0]),
+            float(joints[1]),
+            float(joints[2]),
+            float(joints[3]),
+            float(joints[4]),
+            float(joints[5]),
+        )
+
+    @staticmethod
+    def _load_ik_function() -> PiperIKFunction:
+        try:
+            kinematics = import_module("piper_robot.kinematics")
+        except ImportError as exc:
+            raise RuntimeError(
+                "Piper's shared piper_robot.kinematics module is unavailable"
+            ) from exc
+        ik_function = getattr(kinematics, "ik", None)
+        if not callable(ik_function):
+            raise RuntimeError("Piper's kinematics module does not expose ik()")
+        return ik_function

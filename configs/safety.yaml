@@ -1,3 +1,7 @@
 # 안전 (설계서 9.3 safety.yaml) — 역할 B
 # 관절 범위·변화율·바닥 충돌·데드맨은 Piper Studio 로봇 데몬이 검사한다. 여기는 우리 쪽 추가 상한.
-safety: {workspace_aabb_m: null, speed_scale_max: 0.5, gripper_effort_max: null}
+safety:
+  joint_limits_rad: [[-2.6180, 2.6180], [0.0000, 3.1416], [-2.9671, 0.0000], [-1.7453, 1.7453], [-1.1345, 1.1345], [-2.0944, 2.0944]]  # PLACEHOLDER: joint_limits_deg 변환값, 시뮬/실행 전 실측으로 교체
+  workspace_aabb_m: null       # measured [[x_min,x_max], [y_min,y_max], [z_min,z_max]]
+  speed_scale_max: 0.5
+  gripper_effort_max: 1000     # Piper Web v0.5.9 고정 effort 상한

@@ -10,8 +10,12 @@ import math
 from dataclasses import dataclass, replace
 from typing import Sequence
 
+import numpy as np
+
 from aple.inspection.coloration import InHandView, InspectParams, accumulate_views
+from aple.inspection.geometry import Sphere
 from aple.inspection.grade_classifier import classify
+from aple.inspection.inhand import apple_center_cam
 from aple.execution.motion_executor import (
     GraspCandidate,
     InspectionExecutionResult,
@@ -263,6 +267,7 @@ class PickPlacePipeline:
             raise ValueError("inspection capture payload count does not match captured_views")
 
         captures = inspection.captures
+        sphere_source = self._pose_sphere_source(held)
         previous_scene_id = held.item.apple.scene_id
         views: list[InHandView] = []
         for index, capture in enumerate(captures):
@@ -276,6 +281,13 @@ class PickPlacePipeline:
             if snapshot.tool_pose is None:
                 raise ValueError("in-hand snapshot must include the measured TCP tool_pose")
             previous_scene_id = snapshot.scene_id
+            sphere = None
+            if sphere_source is not None:
+                T_base_camera, apple_in_tcp_m, radius_m = sphere_source
+                center = apple_center_cam(
+                    T_base_camera, np.asarray(snapshot.tool_pose, float), apple_in_tcp_m
+                )
+                sphere = Sphere(center, radius_m)
             views.append(
                 InHandView(
                     snapshot.color,
@@ -283,6 +295,7 @@ class PickPlacePipeline:
                     snapshot.intrinsics,
                     capture.mask,
                     capture.rotation_camera_apple,
+                    sphere,
                 )
             )
 
@@ -305,6 +318,29 @@ class PickPlacePipeline:
             gripper_range_mm=(float(mm_range[0]), float(mm_range[1])),
         )
         return replace(held, regraded_grade=grade)
+
+    def _pose_sphere_source(
+        self, held: HeldAppleWork
+    ) -> tuple[np.ndarray, np.ndarray, float] | None:
+        """Sphere inputs from robot pose; None keeps the silhouette fit (no calibration yet).
+
+        Fingers hide the apple's sides, so a silhouette fit underestimates the radius
+        and inflates coverage. With T_base_camera the center is
+        inv(T_base_camera) @ tool_pose @ apple_in_tcp and the radius is diameter_m / 2.
+        """
+        T_base_camera = self._cfg.get("workcell", {}).get("T_base_camera")
+        if T_base_camera is None:
+            return None
+        T = np.asarray(T_base_camera, float)
+        if T.shape != (4, 4) or not np.all(np.isfinite(T)):
+            raise ValueError("workcell.T_base_camera must be a finite 4x4 matrix")
+        apple_in_tcp_m = np.asarray(held.pick.apple_in_tcp.position_m, float)
+        if apple_in_tcp_m.shape != (3,) or not np.all(np.isfinite(apple_in_tcp_m)):
+            raise ValueError("pick.apple_in_tcp.position_m must contain three finite values")
+        radius_m = float(held.item.apple.diameter_m) / 2.0
+        if not math.isfinite(radius_m) or radius_m <= 0:
+            raise ValueError("apple.diameter_m must be finite and positive for the pose sphere")
+        return T, apple_in_tcp_m, radius_m
 
     def place_regraded_apple(
         self,

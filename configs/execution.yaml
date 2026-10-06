@@ -14,7 +14,7 @@ execution:
     fixed_effort: 1000         # Piper Web v0.5.9 고정 토크
 piper_web:
   enabled: false               # 실기 연결은 안전 설정과 follower iface 확인 후 명시적으로 활성화
-  base_url: "http://127.0.0.1:8000"
+  base_url: "http://127.0.0.1"   # Piper Web v0.5.9 는 80번 포트 (docs/environment.md)
   iface: "PLACEHOLDER_follower"  # PLACEHOLDER: 시뮬/실행 전 Piper Web 등록 follower 이름으로 교체
   request_timeout_s: 3.0
   goal_timeout_s: 20.0

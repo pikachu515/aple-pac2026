@@ -141,7 +141,7 @@ def test_piper_ik_adapter_converts_pose_and_passes_seed():
     )
 
     target, seed = calls[0]
-    assert target[:3, 3] == pytest.approx((0.3, -0.2, 0.4))
+    np.testing.assert_allclose(target[:3, 3], (0.3, -0.2, 0.4), atol=1e-12)
     np.testing.assert_allclose(
         target[:3, :3],
         ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),

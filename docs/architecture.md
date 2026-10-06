@@ -154,6 +154,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | motion_executor, scripted_backend, soft_landing | `execution/motion_executor.py` | 필수 |
 | act_backend | `hal/piper_studio.py` `run_policy` | 필수 (병행) |
 | inspect_skill | `execution/motion_executor.py` `inspect` | 확장 (모드 B) |
+| 미끄러짐 복구 의도 | `execution/pick_place_pipeline.py` `regrade_with_slip_decision` | 확장 (모드 B) — `InHandSlip` 만 잡아 `FailureCode.SLIP` + `RecoveryPolicy` 결정을 반환. 재파지 동작은 하지 않는다 |
 | gripper_force_controller | `execution/gripper.py` | 확장 (FSR/힘 텔레메트리 사용 시) |
 | cycle_manager | `orchestration/cycle_manager.py` | 필수 (단순형) |
 | metrics_logger | `orchestration/metrics_logger.py` | 필수 |
@@ -163,6 +164,10 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | sim_bridge | — | 대회 후 |
 | reject_curve_evaluator | `inspection/evaluation.py`, `tools/color_session.py curve` | 확장 — ✅ 구현·검증 |
 | report_generator | 노트북 분석 | 확장 |
+
+`aple/orchestration/cycle_manager.py` 는 하드웨어 독립형 사이클 실행기다. 캡처, 장면 계획(인식·판정 포함), 실행, `CycleRecord` 생성은 콜백으로 주입하며, 드라이런은 별도 replay/synthetic 캡처 공급자를 요구하고 실행·하드웨어 리셋 콜백을 호출하지 않는다. `orchestration.logging.csv_dir` 가 설정되어 있으면 `cycles.csv` 에 기록한다. 실제 Piper 캡처/FK 공급자 및 복구 정책과 콜백의 통합은 팀 검토 후 연결해야 한다.
+
+`aple/orchestration/recovery.py` 는 Notion M4.5 예외 규칙에 따른 복구 **의도**만 반환한다. 실제 재시도·재촬영·안전 복귀를 수행하지 않으므로, 실행에 연결하기 전에 카운터의 사이클 범위와 하드웨어별 안전 동작을 팀이 검토해야 한다. `GATE_VIOLATION`·E-stop은 즉시 `STOP_AND_IDLE`, 미정의 실패는 `SAFE_STOP_AND_ALERT`로 닫힌다.
 
 ## 4. Piper Studio 연동 시 확인할 것
 

@@ -82,3 +82,56 @@ def test_regrade_stops_at_the_slipped_view(cfg):  # noqa: F811
         pipeline.regrade_held_apple(held, P)
     assert info.value.view_index == 2
     assert isinstance(info.value, ValueError)
+
+
+def _slipped_held(cfg):  # noqa: F811
+    cfg["workcell"]["T_base_camera"] = T_BASE_CAM.tolist()
+    pipeline, held = held_with_captures(cfg)
+    captures = list(held.inspection.captures)
+    shifted = captures[2].snapshot.tool_pose.copy()
+    shifted[:3, 3] += [0.0, 0.02, 0.0]
+    captures[2] = replace(captures[2], snapshot=replace(captures[2].snapshot, tool_pose=shifted))
+    return pipeline, replace(held, inspection=replace(held.inspection, captures=tuple(captures)))
+
+
+def test_slip_decision_first_slip_retries_grasp_once(cfg):  # noqa: F811
+    from aple.orchestration.recovery import RecoveryAction, RecoveryPolicy
+    from aple.schema import FailureCode
+
+    pipeline, held = _slipped_held(cfg)
+    out = pipeline.regrade_with_slip_decision(held, P, RecoveryPolicy(cfg))
+    assert out.failure_code == FailureCode.SLIP
+    assert out.view_index == 2
+    assert out.slip is not None and not out.slip.ok
+    assert out.decision.action == RecoveryAction.RETRY_GRASP_ONCE
+    assert out.held.regraded_grade is None
+
+
+def test_slip_decision_second_slip_safe_stops(cfg):  # noqa: F811
+    from aple.orchestration.recovery import RecoveryAction, RecoveryPolicy
+
+    pipeline, held = _slipped_held(cfg)
+    out = pipeline.regrade_with_slip_decision(held, P, RecoveryPolicy(cfg), slip_retry_count=1)
+    assert out.decision.action == RecoveryAction.SAFE_STOP_AND_ALERT
+    assert out.decision.alert
+
+
+def test_slip_decision_no_slip_returns_grade(cfg):  # noqa: F811
+    from aple.orchestration.recovery import RecoveryPolicy
+    from aple.schema import FailureCode
+
+    cfg["workcell"]["T_base_camera"] = T_BASE_CAM.tolist()
+    pipeline, held = held_with_captures(cfg)
+    out = pipeline.regrade_with_slip_decision(held, P, RecoveryPolicy(cfg))
+    assert out.failure_code == FailureCode.NONE
+    assert out.decision is None
+    assert out.held.regraded_grade is not None
+
+
+def test_slip_decision_does_not_swallow_other_value_errors(cfg):  # noqa: F811
+    from aple.orchestration.recovery import RecoveryPolicy
+
+    pipeline, held = held_with_captures(cfg)
+    held = replace(held, inspection=None)
+    with pytest.raises(ValueError, match="successful in-hand inspection"):
+        pipeline.regrade_with_slip_decision(held, P, RecoveryPolicy(cfg))

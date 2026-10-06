@@ -16,7 +16,7 @@ import numpy as np
 from aple.inspection.coloration import InHandView, InspectParams, accumulate_views
 from aple.inspection.geometry import Sphere
 from aple.inspection.grade_classifier import classify
-from aple.inspection.inhand import InHandSlip, apple_center_cam, check_slip
+from aple.inspection.inhand import InHandSlip, SlipCheck, apple_center_cam, check_slip
 from aple.execution.motion_executor import (
     GraspCandidate,
     InspectionExecutionResult,
@@ -25,6 +25,7 @@ from aple.execution.motion_executor import (
     PickExecutionResult,
 )
 
+from aple.orchestration.recovery import RecoveryDecision, RecoveryPolicy
 from aple.planning.grasp_profile import select as select_grasp_profile
 from aple.planning.placement_planner import PlacementPlanner
 from aple.planning.task_planner import plan_queue
@@ -33,6 +34,7 @@ from aple.schema import (
     BoxOccupancy,
     CaptureMode,
     ExecResult,
+    FailureCode,
     GradeResult,
     GraspProfile,
     InspectionPolicy,
@@ -72,6 +74,22 @@ class HeldAppleWork:
     pick: PickExecutionResult
     inspection: InspectionExecutionResult | None = None
     regraded_grade: GradeResult | None = None
+
+
+@dataclass(frozen=True)
+class RegradeOutcome:
+    """Result of a regrade attempt that reports in-hand slip instead of raising.
+
+    On success ``held`` carries ``regraded_grade``. On slip ``failure_code`` is
+    ``FailureCode.SLIP`` and ``decision`` is the bounded recovery intent; the
+    caller owns any actual re-grasp or safe-stop motion.
+    """
+
+    held: HeldAppleWork
+    failure_code: FailureCode = FailureCode.NONE
+    view_index: int | None = None
+    slip: SlipCheck | None = None
+    decision: RecoveryDecision | None = None
 
 
 class PickPlacePipeline:
@@ -187,7 +205,7 @@ class PickPlacePipeline:
     def execute_scene(
         self, work_plan: SceneWorkPlan, *, backend: str | None = None
     ) -> SceneWorkPlan:
-        """Execute planned PICK_PLACE items in order, stopping on the first failure.
+        """Execute one-apple PICK_PLACE actions in order, stopping on first failure.
 
         DEFER, SKIP, and PICK_INSPECT_PLACE items are retained for the caller;
         they are never sent to the motion adapter by this method.
@@ -201,25 +219,44 @@ class PickPlacePipeline:
             if stopped or item.task.action != TaskAction.PICK_PLACE:
                 completed.append(item)
                 continue
-            if item.placement is None or not item.placement.feasible:
-                completed.append(item)
-                continue
-            if item.grasp_candidate is None:
-                raise ValueError(
-                    f"PICK_PLACE task for apple {item.apple.apple_id} has no grasp candidate"
-                )
-
-            result = self._executor.pick_place(
-                item.apple,
-                item.profile,
-                item.grasp_candidate,
-                item.placement,
-                backend=backend,
+            executed = self.execute_item(item, backend=backend)
+            completed.append(executed)
+            stopped = (
+                executed.execution is not None
+                and not executed.execution.success
             )
-            completed.append(replace(item, execution=result))
-            stopped = not result.success
 
         return replace(work_plan, items=tuple(completed))
+
+    def execute_item(
+        self, item: AppleWorkPlan, *, backend: str | None = None
+    ) -> AppleWorkPlan:
+        """Execute at most one apple's complete pick-and-place action.
+
+        This is the policy boundary described in the idea summary: planning
+        selects one apple and one destination, then the chosen backend performs
+        that single action. Non-PICK_PLACE tasks are returned untouched for the
+        orchestration layer to handle.
+        """
+        if item.task.action != TaskAction.PICK_PLACE:
+            return item
+        if self._executor is None:
+            raise ValueError("a motion_adapter is required to execute an item")
+        if item.placement is None or not item.placement.feasible:
+            return item
+        if item.grasp_candidate is None:
+            raise ValueError(
+                f"PICK_PLACE task for apple {item.apple.apple_id} has no grasp candidate"
+            )
+
+        result = self._executor.pick_place(
+            item.apple,
+            item.profile,
+            item.grasp_candidate,
+            item.placement,
+            backend=backend,
+        )
+        return replace(item, execution=result)
 
     def pick_for_inspection(
         self, item: AppleWorkPlan, *, backend: str | None = None
@@ -326,6 +363,34 @@ class PickPlacePipeline:
             gripper_range_mm=(float(mm_range[0]), float(mm_range[1])),
         )
         return replace(held, regraded_grade=grade)
+
+    def regrade_with_slip_decision(
+        self,
+        held: HeldAppleWork,
+        params: InspectParams,
+        recovery: RecoveryPolicy,
+        *,
+        slip_retry_count: int = 0,
+    ) -> RegradeOutcome:
+        """Regrade, converting only ``InHandSlip`` into a SLIP recovery intent.
+
+        Other ``ValueError`` s (bad captures, bad calibration) still propagate.
+        Slip is detected after all views are captured, so the apple is still
+        held when this returns a slip outcome.
+        """
+        try:
+            return RegradeOutcome(self.regrade_held_apple(held, params))
+        except InHandSlip as exc:
+            _LOG.warning("in-hand slip at view %d: %s", exc.view_index, exc)
+            return RegradeOutcome(
+                held,
+                FailureCode.SLIP,
+                exc.view_index,
+                exc.check,
+                recovery.decide(
+                    failure_code=FailureCode.SLIP, slip_retry_count=slip_retry_count
+                ),
+            )
 
     def _pose_sphere_source(
         self, held: HeldAppleWork

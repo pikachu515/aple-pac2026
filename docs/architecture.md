@@ -154,6 +154,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | motion_executor, scripted_backend, soft_landing | `execution/motion_executor.py` | 필수 |
 | act_backend | `hal/piper_studio.py` `run_policy` | 필수 (병행) |
 | inspect_skill | `execution/motion_executor.py` `inspect` | 확장 (모드 B) |
+| 미끄러짐 복구 의도 | `execution/pick_place_pipeline.py` `regrade_with_slip_decision` | 확장 (모드 B) — `InHandSlip` 만 잡아 `FailureCode.SLIP` + `RecoveryPolicy` 결정을 반환. 재파지 동작은 하지 않는다 |
 | gripper_force_controller | `execution/gripper.py` | 확장 (FSR/힘 텔레메트리 사용 시) |
 | cycle_manager | `orchestration/cycle_manager.py` | 필수 (단순형) |
 | metrics_logger | `orchestration/metrics_logger.py` | 필수 |

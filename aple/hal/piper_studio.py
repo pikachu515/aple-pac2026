@@ -21,6 +21,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
+from aple.execution.goal_builder import Pose3D
+from aple.inspection.in_hand_capture import InHandCapture
 from aple.schema import ArmCommand, LightingStatus, SceneSnapshot
 
 JOINT_NAMES = tuple(f"joint{index}" for index in range(1, 7))
@@ -224,7 +226,7 @@ class PiperStudio:
         targets = tuple(self._normalize_joint_target(point) for point in points_rad)
         self._move_sequence_to_normalized(targets, timeout_s)
 
-    def send(self, cmd: ArmCommand) -> None:
+    def send(self, cmd: ArmCommand, *, timeout_s: float | None = None) -> None:
         """Send a measured joint pose and calibrated gripper width through web jog."""
         self._require_enabled()
         self._require_robotd_safety_confirmation()
@@ -236,7 +238,15 @@ class PiperStudio:
                 "change the Piper Web robotd implementation before tuning this value"
             )
         target = {**joints, "gripper": gripper}
-        self._move_to_normalized(target, self._goal_timeout_s)
+        timeout = (
+            self._goal_timeout_s
+            if timeout_s is None
+            else self._positive_number(timeout_s, "timeout_s")
+        )
+        self._move_to_normalized(
+            target,
+            timeout,
+        )
 
     def move_named(
         self,
@@ -586,8 +596,8 @@ class PiperStudioMotionTransport:
         studio: PiperStudio,
         *,
         max_joint_step_rad: float,
-        tool_pose_provider: Callable[[tuple[float, ...]], Any] | None = None,
-        in_hand_capture_provider: Callable[..., Any] | None = None,
+        tool_pose_provider: Callable[[tuple[float, ...]], Pose3D] | None = None,
+        in_hand_capture_provider: Callable[..., InHandCapture | None] | None = None,
     ) -> None:
         self._studio = studio
         self._tool_pose_provider = tool_pose_provider
@@ -616,29 +626,42 @@ class PiperStudioMotionTransport:
     def set_gripper_width(
         self, width_m: float, effort: int, *, timeout_s: float
     ) -> bool:
-        del timeout_s
         joints = self._studio.joint_state()
-        self._studio.send(ArmCommand(joints, width_m, effort, "scripted"))
+        self._studio.send(
+            ArmCommand(joints, width_m, effort, "scripted"),
+            timeout_s=timeout_s,
+        )
         return True
 
-    def tool_pose(self):
+    def tool_pose(self) -> Pose3D:
         """Forward kinematics of the measured joints via the injected provider (base_link, m)."""
         if self._tool_pose_provider is None:
             raise PiperWebError(
                 "Provide a tool_pose_provider (e.g. Piper forward kinematics); "
                 "Piper Web v0.5.9 does not report a TCP pose"
             )
-        return self._tool_pose_provider(self._studio.joint_state())
+        result = self._tool_pose_provider(self._studio.joint_state())
+        if not isinstance(result, Pose3D):
+            raise PiperWebError("tool_pose_provider must return a Pose3D in base_link meters")
+        return result
 
-    def capture_in_hand(self, apple_id: int, view_index: int, *, timeout_s: float):
+    def capture_in_hand(
+        self, apple_id: int, view_index: int, *, timeout_s: float
+    ) -> InHandCapture | None:
         if self._in_hand_capture_provider is None:
             raise PiperWebError(
                 "Provide an in_hand_capture_provider returning aligned color/depth "
                 "and intrinsics; Piper Web v0.5.9 preview is JPEG only"
             )
-        return self._in_hand_capture_provider(
-            apple_id, view_index, self._studio.joint_state(), timeout_s=timeout_s
+        timeout = PiperStudio._positive_number(timeout_s, "timeout_s")
+        result = self._in_hand_capture_provider(
+            apple_id, view_index, self._studio.joint_state(), timeout_s=timeout
         )
+        if result is not None and not isinstance(result, InHandCapture):
+            raise PiperWebError(
+                "in_hand_capture_provider must return InHandCapture or None"
+            )
+        return result
 
     def _build_waypoints(
         self,

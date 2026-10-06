@@ -187,7 +187,7 @@ class PickPlacePipeline:
     def execute_scene(
         self, work_plan: SceneWorkPlan, *, backend: str | None = None
     ) -> SceneWorkPlan:
-        """Execute planned PICK_PLACE items in order, stopping on the first failure.
+        """Execute one-apple PICK_PLACE actions in order, stopping on first failure.
 
         DEFER, SKIP, and PICK_INSPECT_PLACE items are retained for the caller;
         they are never sent to the motion adapter by this method.
@@ -201,25 +201,44 @@ class PickPlacePipeline:
             if stopped or item.task.action != TaskAction.PICK_PLACE:
                 completed.append(item)
                 continue
-            if item.placement is None or not item.placement.feasible:
-                completed.append(item)
-                continue
-            if item.grasp_candidate is None:
-                raise ValueError(
-                    f"PICK_PLACE task for apple {item.apple.apple_id} has no grasp candidate"
-                )
-
-            result = self._executor.pick_place(
-                item.apple,
-                item.profile,
-                item.grasp_candidate,
-                item.placement,
-                backend=backend,
+            executed = self.execute_item(item, backend=backend)
+            completed.append(executed)
+            stopped = (
+                executed.execution is not None
+                and not executed.execution.success
             )
-            completed.append(replace(item, execution=result))
-            stopped = not result.success
 
         return replace(work_plan, items=tuple(completed))
+
+    def execute_item(
+        self, item: AppleWorkPlan, *, backend: str | None = None
+    ) -> AppleWorkPlan:
+        """Execute at most one apple's complete pick-and-place action.
+
+        This is the policy boundary described in the idea summary: planning
+        selects one apple and one destination, then the chosen backend performs
+        that single action. Non-PICK_PLACE tasks are returned untouched for the
+        orchestration layer to handle.
+        """
+        if item.task.action != TaskAction.PICK_PLACE:
+            return item
+        if self._executor is None:
+            raise ValueError("a motion_adapter is required to execute an item")
+        if item.placement is None or not item.placement.feasible:
+            return item
+        if item.grasp_candidate is None:
+            raise ValueError(
+                f"PICK_PLACE task for apple {item.apple.apple_id} has no grasp candidate"
+            )
+
+        result = self._executor.pick_place(
+            item.apple,
+            item.profile,
+            item.grasp_candidate,
+            item.placement,
+            backend=backend,
+        )
+        return replace(item, execution=result)
 
     def pick_for_inspection(
         self, item: AppleWorkPlan, *, backend: str | None = None

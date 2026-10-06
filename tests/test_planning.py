@@ -576,3 +576,16 @@ def test_verify_placement_invalid_depth_keeps_reservation(cfg):
     result = planner.verify(plan, apple(), _box([0.0] * 3), _box([0.0] * 3, valid=False))
     assert not result.verified
     assert planner.reserved
+
+
+def test_verify_placement_rejects_occupancy_from_another_box(cfg):
+    planner, plan = _planned(cfg)
+    other_box = BoxOccupancy(
+        1, Grade.MIDDLE, 1, 3, 0.1, 0.1, 0.1, (0.0, 0.0, 0.0),
+        [0.0] * 3, [False] * 3, True,
+    )
+
+    with pytest.raises(ValueError, match="planned box_id"):
+        planner.verify(plan, apple(), other_box, other_box)
+
+    assert (int(plan.box_id), plan.cell_index) in planner.reserved

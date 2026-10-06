@@ -5,12 +5,15 @@ workcell:
   frames: {base: base_link, camera: camera_top_optical_frame, tcp: tcp}
   T_base_camera: null           # 4x4, eye-to-hand 캘리브레이션 결과 (m)
   tcp_offset_m: null            # 핑거 어댑터 반영
-  tray:
+  tray:                         # base_link 축 정렬 사각형
+    center_m: null              # [x, y, z] 트레이 바닥 윗면 중심 (m), 현장 실측. null 이면 영상 전체에서 검출
     size_m: [0.3, 0.2]
     wall_height_m: 0.03
   boxes:                        # 등급 번호 = 상자 번호 (UPPER=0, MIDDLE=1, REJECT=2)
-    UPPER:  {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08}
-    MIDDLE: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08}
-    REJECT: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08}
+    # origin_m: 격자 원점 [x, y, z] (m, base_link) — x·y 최소 칸 모서리, z 상자 바닥 윗면. 현장 실측
+    # 격자는 base_link 축 정렬: 열 = +x, 행 = +y, 칸 번호 = 행·cols + 열. null 이면 그 상자는 측정하지 않는다
+    UPPER:  {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08, origin_m: null}
+    MIDDLE: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08, origin_m: null}
+    REJECT: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08, origin_m: null}
   placement: {max_drop_m: 0.03, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near}
   poses: {home_joint_rad: null, scan_joint_rad: null}

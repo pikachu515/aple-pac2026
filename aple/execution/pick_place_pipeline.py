@@ -16,7 +16,7 @@ import numpy as np
 from aple.inspection.coloration import InHandView, InspectParams, accumulate_views
 from aple.inspection.geometry import Sphere
 from aple.inspection.grade_classifier import classify
-from aple.inspection.inhand import apple_center_cam
+from aple.inspection.inhand import InHandSlip, apple_center_cam, check_slip
 from aple.execution.motion_executor import (
     GraspCandidate,
     InspectionExecutionResult,
@@ -289,6 +289,12 @@ class PickPlacePipeline:
                 center = apple_center_cam(
                     T_base_camera, np.asarray(snapshot.tool_pose, float), apple_in_tcp_m
                 )
+                slip = check_slip(
+                    snapshot.depth_m, capture.mask, snapshot.intrinsics, center, radius_m,
+                    **self._cfg["inspection"]["slip_check"],
+                )
+                if not slip.ok:
+                    raise InHandSlip(index, slip)
                 sphere = Sphere(center, radius_m)
             views.append(
                 InHandView(

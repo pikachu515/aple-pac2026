@@ -6,6 +6,7 @@ is available only through an explicitly injected motion adapter.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, replace
 from typing import Sequence
@@ -41,6 +42,7 @@ from aple.schema import (
     Source,
 )
 
+_LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class AppleWorkPlan:
@@ -330,10 +332,16 @@ class PickPlacePipeline:
         """
         T_base_camera = self._cfg.get("workcell", {}).get("T_base_camera")
         if T_base_camera is None:
+            _LOG.warning(
+                "workcell.T_base_camera is not set; mode-B regrade uses the silhouette "
+                "sphere, which overstates coverage when fingers hide the apple"
+            )
             return None
         T = np.asarray(T_base_camera, float)
         if T.shape != (4, 4) or not np.all(np.isfinite(T)):
             raise ValueError("workcell.T_base_camera must be a finite 4x4 matrix")
+        if held.pick.apple_in_tcp is None:
+            raise ValueError("pick stage did not produce apple_in_tcp")
         apple_in_tcp_m = np.asarray(held.pick.apple_in_tcp.position_m, float)
         if apple_in_tcp_m.shape != (3,) or not np.all(np.isfinite(apple_in_tcp_m)):
             raise ValueError("pick.apple_in_tcp.position_m must contain three finite values")

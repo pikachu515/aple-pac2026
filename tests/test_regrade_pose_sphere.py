@@ -106,3 +106,17 @@ def test_regrade_rejects_malformed_calibration(cfg, monkeypatch):  # noqa: F811
     cfg["workcell"]["T_base_camera"] = np.eye(3).tolist()
     with pytest.raises(ValueError, match="T_base_camera must be a finite 4x4"):
         regrade_recording(cfg, monkeypatch)
+
+
+def test_regrade_rejects_missing_apple_in_tcp(cfg):  # noqa: F811
+    cfg["workcell"]["T_base_camera"] = T_BASE_CAM.tolist()
+    pipeline, held = held_with_captures(cfg)
+    held = replace(held, pick=replace(held.pick, apple_in_tcp=None))
+    with pytest.raises(ValueError, match="did not produce apple_in_tcp"):
+        pipeline.regrade_held_apple(held, P)
+
+
+def test_silhouette_fallback_logs_warning(cfg, monkeypatch, caplog):  # noqa: F811
+    with caplog.at_level("WARNING", logger=pipeline_module.__name__):
+        regrade_recording(cfg, monkeypatch)
+    assert "T_base_camera is not set" in caplog.text

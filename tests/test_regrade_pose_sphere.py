@@ -116,7 +116,9 @@ def test_regrade_rejects_missing_apple_in_tcp(cfg):  # noqa: F811
         pipeline.regrade_held_apple(held, P)
 
 
-def test_silhouette_fallback_logs_warning(cfg, monkeypatch, caplog):  # noqa: F811
-    with caplog.at_level("WARNING", logger=pipeline_module.__name__):
-        regrade_recording(cfg, monkeypatch)
-    assert "T_base_camera is not set" in caplog.text
+def test_silhouette_fallback_logs_warning(cfg, monkeypatch):  # noqa: F811
+    # caplog 대신 로거를 직접 가로챈다 — ROS 등 pytest 플러그인이 로그 수집을 바꿔도 같은 결과
+    warnings = []
+    monkeypatch.setattr(pipeline_module._LOG, "warning", lambda msg, *a, **k: warnings.append(msg % a if a else msg))
+    regrade_recording(cfg, monkeypatch)
+    assert any("T_base_camera is not set" in w for w in warnings)

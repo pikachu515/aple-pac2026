@@ -195,6 +195,42 @@ def test_execute_scene_uses_adapter_and_stops_after_first_failure(cfg):
     assert result.items[1].execution is None
 
 
+def test_execute_item_runs_exactly_one_apple_action(cfg):
+    adapter = RecordingMotionAdapter()
+    pipeline = PickPlacePipeline(cfg, adapter)
+    plan = pipeline.plan_scene(
+        [apple(1, clearance_m=0.03), apple(2, clearance_m=0.08)],
+        [grade(1), grade(2)],
+        [box()],
+        [grasp_candidate(1), grasp_candidate(2)],
+    )
+
+    executed = pipeline.execute_item(plan.items[0], backend="scripted")
+
+    assert executed.execution is not None and executed.execution.success
+    assert executed.apple.apple_id == plan.items[0].apple.apple_id
+    assert [name for name, _ in adapter.calls] == ["phase_a", "phase_b"]
+    assert {data["apple_id"] for name, data in adapter.calls if name == "phase_a"} == {
+        plan.items[0].apple.apple_id
+    }
+
+
+def test_execute_item_leaves_non_pick_place_actions_for_orchestrator(cfg):
+    adapter = RecordingMotionAdapter()
+    pipeline = PickPlacePipeline(cfg, adapter)
+    plan = pipeline.plan_scene(
+        [apple()],
+        [grade(final=False)],
+        [box()],
+        [grasp_candidate()],
+    )
+    item = plan.items[0]
+
+    assert item.task.action == TaskAction.PICK_INSPECT_PLACE
+    assert pipeline.execute_item(item) is item
+    assert adapter.calls == []
+
+
 def test_execute_scene_refuses_to_run_without_injected_adapter(cfg):
     plan = PickPlacePipeline(cfg).plan_scene(
         [apple()], [grade()], [box()], [grasp_candidate()]

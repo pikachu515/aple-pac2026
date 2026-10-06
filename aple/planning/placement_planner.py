@@ -162,6 +162,8 @@ class PlacementPlanner:
         invalid = PlacementVerification(box_id, cell, False, False, False, math.nan, math.nan)
         if not plan.feasible or cell < 0 or not (before.valid and after.valid):
             return invalid
+        if before.box_id != plan.box_id or after.box_id != plan.box_id:
+            raise ValueError("before and after occupancy must match the planned box_id")
         if len(before.heights_m) != len(after.heights_m) or cell >= len(after.heights_m):
             return invalid
         tol_m = float(self.cfg["execution"]["placement_verify"]["height_tol_m"])

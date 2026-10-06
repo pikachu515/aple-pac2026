@@ -7,7 +7,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import pytest
 
+from aple.execution.goal_builder import Pose3D
 from aple.hal.piper_studio import PiperStudio, PiperStudioMotionTransport, PiperWebError
+from aple.inspection.in_hand_capture import InHandCapture
 from aple.schema import (
     ArmCommand,
     CaptureMode,
@@ -168,8 +170,8 @@ class FakeMotionStudio:
         self.calls.append(("trajectory", waypoints, timeout_s))
         self.joints = waypoints[-1]
 
-    def send(self, command):
-        self.calls.append(("send", command))
+    def send(self, command, *, timeout_s=None):
+        self.calls.append(("send", command, timeout_s))
         self.joints = command.position_rad
 
 
@@ -320,11 +322,26 @@ def test_motion_transport_uses_current_joint_state_for_gripper_commands():
 
     transport.set_gripper_width(0.04, 1000, timeout_s=1.0)
 
-    kind, command = studio.calls[0]
+    kind, command, timeout_s = studio.calls[0]
     assert kind == "send"
     assert command.position_rad == pytest.approx((0.0,) * 6)
     assert command.gripper_width_m == pytest.approx(0.04)
     assert command.gripper_effort == 1000
+    assert timeout_s == pytest.approx(1.0)
+
+
+def test_send_uses_caller_timeout_for_gripper_command(piper_web, monkeypatch):
+    _, adapter = piper_web
+    calls = []
+    monkeypatch.setattr(
+        adapter,
+        "_move_to_normalized",
+        lambda target, timeout_s: calls.append((target, timeout_s)),
+    )
+
+    adapter.send(ArmCommand((0.0,) * 6, 0.04, 1000, "scripted"), timeout_s=0.1)
+
+    assert calls[0][1] == pytest.approx(0.1)
 
 
 def test_motion_transport_tool_pose_and_capture_require_providers():
@@ -339,16 +356,57 @@ def test_motion_transport_tool_pose_and_capture_require_providers():
 def test_motion_transport_passes_measured_joints_to_providers():
     studio = FakeMotionStudio()
     studio.joints = (0.1,) * 6
+    pose = Pose3D((0.1, 0.2, 0.3), (0.0, 0.0, 0.0, 1.0))
+    snapshot = SceneSnapshot(
+        1, Source.IN_HAND, CaptureMode.FULL,
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        np.ones((2, 2), dtype=np.float32),
+        (1.0, 1.0, 0.0, 0.0), 0.0,
+    )
+    capture = InHandCapture(snapshot, np.ones((2, 2), dtype=bool), np.eye(3))
     seen = {}
     transport = PiperStudioMotionTransport(
         studio,
         max_joint_step_rad=0.2,
-        tool_pose_provider=lambda joints: ("pose", joints),
-        in_hand_capture_provider=lambda apple, view, joints, timeout_s: (apple, view, joints),
+        tool_pose_provider=lambda joints: (seen.update(pose_joints=joints) or pose),
+        in_hand_capture_provider=lambda apple, view, joints, timeout_s: (
+            seen.update(
+                capture_args=(apple, view, joints, timeout_s)
+            ) or capture
+        ),
     )
 
-    assert transport.tool_pose() == ("pose", (0.1,) * 6)
-    assert transport.capture_in_hand(7, 2, timeout_s=1.0) == (7, 2, (0.1,) * 6)
+    assert transport.tool_pose() == pose
+    assert seen["pose_joints"] == (0.1,) * 6
+    assert transport.capture_in_hand(7, 2, timeout_s=1.0) == capture
+    assert seen["capture_args"] == (7, 2, (0.1,) * 6, 1.0)
+
+
+def test_motion_transport_rejects_invalid_provider_payloads():
+    transport = PiperStudioMotionTransport(
+        FakeMotionStudio(),
+        max_joint_step_rad=0.2,
+        tool_pose_provider=lambda joints: ("not", "a", "Pose3D"),
+        in_hand_capture_provider=lambda apple, view, joints, timeout_s: {
+            "not": "an InHandCapture"
+        },
+    )
+
+    with pytest.raises(PiperWebError, match="must return a Pose3D"):
+        transport.tool_pose()
+    with pytest.raises(PiperWebError, match="must return InHandCapture or None"):
+        transport.capture_in_hand(1, 0, timeout_s=1.0)
+
+
+def test_motion_transport_rejects_non_positive_capture_timeout():
+    transport = PiperStudioMotionTransport(
+        FakeMotionStudio(),
+        max_joint_step_rad=0.2,
+        in_hand_capture_provider=lambda apple, view, joints, timeout_s: None,
+    )
+
+    with pytest.raises(ValueError, match="timeout_s"):
+        transport.capture_in_hand(1, 0, timeout_s=0.0)
 
 
 def test_joint_goal_opens_and_closes_v059_jog_session(piper_web):

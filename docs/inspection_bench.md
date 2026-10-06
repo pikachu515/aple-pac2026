@@ -1,6 +1,7 @@
 # 색상 판정 실측 절차 (역할 C · D435 단독)
 
 로봇 없이 D435와 사과만으로 M2(색상 품질 판별)의 기준값을 정하는 절차다.
+같은 날 YOLO 검출용 촬영까지 함께 하려면 [data_collection.md](data_collection.md) 의 촬영 목록을 따른다.
 결과로 `configs/varieties.yaml` 의 **[임시]** 값 세 가지를 실측값으로 바꾼다.
 
 | 정할 값 | 도구 | 의미 |
@@ -133,7 +134,7 @@ python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk
 python tools/color_session.py compare data/truth/_analysis/truth.csv --labels data/truth/labels.csv
 
 # ⑥ 리젝트 곡선 → delta_up 반영(제안값 + 여유 0.03) + 발표 그래프(_analysis/reject_curve.png)
-python tools/color_session.py curve   data/truth/_analysis/truth.csv --labels data/truth/labels.csv --apply
+python tools/color_session.py curve   data/truth/_analysis/truth_views.csv --labels data/truth/labels.csv --apply   # 자세별 표본
 
 # ⑦ 판정 재현성 — 5절에서 같은 배치로 찍은 장면만 따로 모은 폴더 (사과를 움직이지 않고 5장 이상)
 python tools/color_session.py repeat  data/snapshots/1006_repeat

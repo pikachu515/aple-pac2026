@@ -136,6 +136,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | camera_top | Piper Studio rsd (`hal/piper_studio.py` `snapshot`) | 대체 |
 | camera_color_setup, color_normalizer, lighting_monitor | Piper Studio 회색 카드 보정 · 조명 감시 (Piper Studio 밖 실험용: `inspection/color.py`) | 대체 — ✅ 소프트웨어판 구현·검증 |
 | (카드 보정·조명 상태 공급자) | `inspection/card_monitor.py` `CardMonitor` — 원본 스냅샷에 카드 게인 적용(`capture`) + 같은 프레임 기준 조명 상태(`lighting_status_provider`). `color.card_json` 의 card.json 사용 | 필수 — ✅ 구현·검증 (합성) |
+| (레퍼런스 색 패치 조건부 보정, S3-5) | `inspection/ref_patch.py` — 적·황·백 + 회색 카드 기준 색으로 3×3 선형 보정. `CardMonitor` 가 조명이 틀어졌을 때만 적용 → 맞으면 CORRECTING 으로 판정 계속, 아니면 FAULT. 기준값은 `color_session patches` → `color.patch_json` | 확장 — ✅ 구현·검증 (합성) |
 | calibration_node | `hal/calibration.py` | 필수 |
 | workcell_config_server | `configs/*.yaml` | 필수 |
 | scene_capture_server | `hal/piper_studio.py` `snapshot` | 필수 |

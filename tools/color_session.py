@@ -2,6 +2,7 @@
 
 순서 (docs/inspection_bench.md 참고)
   1. card     회색 카드 영역을 지정해 색 보정값(card.json)을 만든다
+     patches  (선택) 적·황·백 레퍼런스 패치 영역을 지정해 기준 색(patch.json)을 만든다 — 조명이 틀어질 때만 쓰는 보정
   2. analyze  사과를 찾아 착색비율·등급을 계산하고 오버레이 이미지·CSV를 남긴다
   3. suggest  사과 픽셀 색상각 분포로 착색 판정 경계(hue)를 제안한다
   4. truth    사과마다 자세를 바꿔 찍은 6장으로 전표면 비율을 구하고, 탑뷰와의 오차를 잰다
@@ -12,6 +13,7 @@
   suggest · truth · curve 에 --apply 를 붙이면 제안값을 configs/varieties.yaml 에 바로 써 넣는다
 
     python tools/color_session.py card    data/snapshots/1006_desk
+    python tools/color_session.py patches data/snapshots/1006_desk
     python tools/color_session.py analyze data/snapshots/1006_desk
     python tools/color_session.py suggest data/snapshots/1006_desk
     python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk/card.json
@@ -39,6 +41,7 @@ from aple.inspection.coloration import (InspectParams, measure_view, params_from
                                         standard_grade)
 from aple.inspection.evaluation import pick_delta_up, plot_curve, reject_curve  # noqa: E402
 from aple.inspection.grade_classifier import classify  # noqa: E402
+from aple.inspection.ref_patch import PatchCalib, calibrate_patches  # noqa: E402
 from aple.inspection.standalone import segment_apples  # noqa: E402
 from aple.schema import Grade, LightState  # noqa: E402
 
@@ -123,6 +126,35 @@ def cmd_card(folder: Path, roi_arg: str | None, file_arg: str | None) -> CardCal
     print(f"카드 밝기 {card_brightness(color, roi):.0f} (118 근처가 좋다. 200 이상이면 노출 과다, 60 이하면 부족)")
     print(f"채널 게인 R {calib.rgb_gain[0]:.2f}  G {calib.rgb_gain[1]:.2f}  B {calib.rgb_gain[2]:.2f}")
     print(f"저장: {folder / 'card.json'}")
+    return calib
+
+
+PATCH_NAMES = ("red", "yellow", "white")
+
+
+def cmd_patches(folder: Path, roi_args: list[str] | None, file_arg: str | None) -> PatchCalib:
+    """레퍼런스 패치 기준 색 → folder/patch.json. 카드(card.json)가 있으면 4번째 패치로 함께 넣는다."""
+    snaps = load_snaps(folder)
+    path, color = (Path(file_arg), np.load(file_arg)["color"]) if file_arg else (snaps[0][0], snaps[0][1])
+    rois: dict[str, tuple[int, int, int, int]] = {}
+    if roi_args:
+        for item in roi_args:
+            name, _, box = item.partition("=")
+            rois[name] = tuple(int(v) for v in box.split(","))
+    else:
+        for name in PATCH_NAMES:
+            r = cv2.selectROI(f"drag {name} patch, then ENTER", color, showCrosshair=False)
+            cv2.destroyAllWindows()
+            rois[name] = tuple(int(v) for v in r)
+    card = find_card(folder, None)
+    if card is not None and "card" not in rois:
+        rois["card"] = tuple(card.roi)
+    calib = calibrate_patches(color, rois)
+    (folder / "patch.json").write_text(json.dumps(calib.to_dict(), indent=2), encoding="utf-8")
+    print(f"기준 사진 {path.name}")
+    for name, lin in calib.ref_lin.items():
+        print(f"  {name:7s} 영역 {calib.rois[name]}  선형 RGB {lin[0]:.3f} {lin[1]:.3f} {lin[2]:.3f}")
+    print(f"저장: {folder / 'patch.json'}  (configs/color.yaml 의 color.patch_json 에 이 경로를 넣는다)")
     return calib
 
 
@@ -430,6 +462,10 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("folder", type=Path)
     a.add_argument("--roi", help="x,y,w,h (화면 없이 지정할 때)")
     a.add_argument("--file", help="기준으로 쓸 스냅샷 (기본: 폴더 첫 장)")
+    pa = sub.add_parser("patches")
+    pa.add_argument("folder", type=Path)
+    pa.add_argument("--roi", action="append", help="name=x,y,w,h (화면 없이 지정할 때, 패치마다 반복)")
+    pa.add_argument("--file", help="기준으로 쓸 스냅샷 (기본: 폴더 첫 장)")
     for name in ("analyze", "suggest", "truth", "repeat"):
         b = sub.add_parser(name)
         b.add_argument("folder", type=Path)
@@ -452,6 +488,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "card":
         cmd_card(args.folder, args.roi, args.file)
+    elif args.cmd == "patches":
+        cmd_patches(args.folder, args.roi, args.file)
     elif args.cmd == "analyze":
         cmd_analyze(args.folder, args.card, args.variety)
     elif args.cmd == "suggest":

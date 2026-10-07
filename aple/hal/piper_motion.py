@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Protocol
+from typing import Callable, Protocol
 
 from aple.execution.goal_builder import (
     MotionTargets,
@@ -23,6 +23,8 @@ from aple.execution.motion_executor import (
     PhaseAResult,
     PhaseBResult,
     PickPhaseResult,
+    ViewCheck,
+    ViewVerdict,
 )
 from aple.execution.soft_landing import GripperAction, SoftLandingPlan
 from aple.execution.trajectory import (
@@ -93,6 +95,11 @@ class PiperTrajectoryMotionAdapter:
             limits,
             max_joint_step_rad=step,
         )
+
+    def gripper_width_m(self) -> float | None:
+        """Finger width if the transport can read it; None means unknown, not lost."""
+        reader = getattr(self._transport, "gripper_width_m", None)
+        return None if reader is None else reader()
 
     def move_named(
         self,
@@ -296,11 +303,13 @@ class PiperTrajectoryMotionAdapter:
         *,
         effort: int,
         timeout_s: float,
+        view_check: ViewCheck | None = None,
     ) -> InspectionPhaseResult:
         del effort
         deadline = self._deadline(timeout_s)
         speed_scale = float(self._cfg["safety"]["speed_scale_max"])
         captures: list[InHandCapture] = []
+        width_watch = self._grip_width_watch()
         for view_index, pose in enumerate(inspection_plan.target_tool_poses):
             try:
                 self._move_poses((pose,), speed_scale=speed_scale, deadline=deadline)
@@ -317,8 +326,62 @@ class PiperTrajectoryMotionAdapter:
             )
             if capture is None:
                 return InspectionPhaseResult(False, len(captures), tuple(captures))
+            if width_watch is not None and width_watch():
+                # 그리퍼 폭 변화가 1차 미끄러짐 신호 (S8-6): 영상 검사 전에 바로 멈춘다.
+                captures.append(capture)
+                return InspectionPhaseResult(
+                    False, len(captures), tuple(captures), slip_view_index=view_index
+                )
+            if view_check is not None:
+                verdict = view_check(view_index, capture)
+                if verdict == ViewVerdict.UNVERIFIED:
+                    # Depth may simply be empty: retake once at the same pose before calling it slip.
+                    retake = self._transport.capture_in_hand(
+                        profile.apple_id,
+                        view_index,
+                        timeout_s=self._remaining(deadline),
+                    )
+                    if retake is None:
+                        return InspectionPhaseResult(False, len(captures), tuple(captures))
+                    capture = retake
+                    if width_watch is not None and width_watch():
+                        captures.append(capture)
+                        return InspectionPhaseResult(
+                            False, len(captures), tuple(captures), slip_view_index=view_index
+                        )
+                    verdict = view_check(view_index, capture)
+                    if verdict == ViewVerdict.UNVERIFIED:
+                        verdict = ViewVerdict.SLIP
+                if verdict == ViewVerdict.SLIP:
+                    captures.append(capture)
+                    return InspectionPhaseResult(
+                        False, len(captures), tuple(captures), slip_view_index=view_index
+                    )
             captures.append(capture)
         return InspectionPhaseResult(True, len(captures), tuple(captures))
+
+    def _grip_width_watch(self) -> Callable[[], bool] | None:
+        """Callable returning True once the finger width shows the apple slipping or lost.
+
+        Needs a transport that can read the width and ``execution.recovery.width_watch``;
+        the reference is the width at the start of the inspection (apple just grasped).
+        """
+        execution = self._cfg.get("execution", {})
+        if not execution.get("recovery", {}).get("width_watch", False):
+            return None
+        reference = self.gripper_width_m()
+        if reference is None:
+            return None
+        slip_width_m = float(execution["gripper"]["slip_width_m"])
+        lost_width_m = float(execution["recovery"]["lost_grip_width_m"])
+
+        def slipped() -> bool:
+            width = self.gripper_width_m()
+            return width is not None and (
+                width - reference > slip_width_m or width <= lost_width_m
+            )
+
+        return slipped
 
     def inspect(
         self,

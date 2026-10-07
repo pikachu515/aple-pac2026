@@ -144,6 +144,140 @@ def test_from_config_requires_calibration(config):
         SceneRunner.from_config(config, PickPlacePipeline(config))
 
 
+def test_execute_passes_backend_and_mode_b_options(config, monkeypatch):
+    runner = runner_for(config, RecordingMotionAdapter())
+    runner._backend = "act"
+    plan = runner.plan(Scene()())
+    calls = []
+
+    def execute(work, **kwargs):
+        calls.append(kwargs)
+        return work
+
+    monkeypatch.setattr(runner.pipeline, "execute_scene", execute)
+    runner.execute(plan)
+
+    assert calls[0]["backend"] == "act"
+    assert calls[0]["inspect_params"] is not None
+    assert calls[0]["boxes"] == plan.boxes
+
+
+def test_records_use_executed_placement_and_grade(config):
+    from dataclasses import replace
+    from aple.schema import ExecResult, Phase
+
+    runner = runner_for(config, RecordingMotionAdapter())
+    snap = Scene()()
+    plan = runner.plan(snap)
+    item = next(it for it in plan.work.items if it.placement is not None)
+    top = next(g for g in plan.grades if g.apple_id == item.apple.apple_id)
+    done = replace(
+        item, placement=replace(item.placement, box_id=Grade.REJECT, cell_index=4),
+        final_grade=replace(top, grade=Grade.REJECT, final=True),
+        execution=ExecResult(True, FailureCode.NONE, Phase.RETREAT),
+    )
+    execution = replace(plan.work, items=(done,))
+
+    row = next(r for r in runner.records(snap, plan, execution) if r.apple_id == item.apple.apple_id)
+
+    assert row.success and row.grade == Grade.REJECT
+    assert row.target_box == Grade.REJECT and row.target_cell == 4
+
+
+def test_placement_ik_failure_is_not_logged_as_approach_failure():
+    from aple.orchestration.scene_runner import _fail_stage
+    from aple.schema import ExecResult, Phase
+
+    assert _fail_stage(None, ExecResult(False, FailureCode.IK_FAIL, Phase.TRANSIT)) == FailStage.F4
+    assert _fail_stage(None, ExecResult(False, FailureCode.IK_FAIL, Phase.APPROACH)) == FailStage.F1
+
+
+def test_execution_failure_blocks_automatic_motion_in_later_cycles(config):
+    from aple.execution.motion_executor import PhaseAResult
+    from aple.schema import Phase
+
+    adapter = RecordingMotionAdapter(
+        phase_a_result=PhaseAResult(False, FailureCode.IK_FAIL, Phase.APPROACH, False, False)
+    )
+    runner = runner_for(config, adapter)
+    scene = Scene()
+    runner.execute(runner.plan(scene()))
+    count = len(adapter.calls)
+
+    runner.execute(runner.plan(scene()))
+
+    assert len(adapter.calls) == count
+
+
+def test_backend_defaults_to_execution_config(config):
+    config["execution"]["default_backend"] = "act"
+    runner = runner_for(config, RecordingMotionAdapter())
+    snap = Scene()()
+    rows = runner.records(snap, runner.plan(snap), None)
+
+    assert all(row.backend == "act" for row in rows)
+
+
+@pytest.mark.parametrize("code,phase,stage", [
+    (FailureCode.IK_FAIL, "DESCEND", FailStage.F1),
+    (FailureCode.TIMEOUT, "GRASP", FailStage.F2),
+    (FailureCode.NO_CONTACT, "DESCEND", FailStage.F2),
+    (FailureCode.DROP, "TRANSIT", FailStage.F3),
+    (FailureCode.COLLISION, "TRANSIT", FailStage.F4),
+    (FailureCode.HOVER_NOT_REACHED, "HOVER", FailStage.F4),
+    (FailureCode.ABORTED, "RELEASE", FailStage.F4),
+    (FailureCode.ABORTED, "IDLE", FailStage.NONE),
+    (FailureCode.GATE_VIOLATION, "IDLE", FailStage.NONE),
+])
+def test_failure_stage_uses_failure_code_and_physical_phase(code, phase, stage):
+    from aple.orchestration.scene_runner import _fail_stage
+    from aple.schema import ExecResult, Phase
+
+    assert _fail_stage(None, ExecResult(False, code, Phase[phase])) == stage
+
+
+def test_records_reject_a_different_scene(config):
+    from dataclasses import replace
+
+    runner = runner_for(config, RecordingMotionAdapter())
+    snap = Scene()()
+    plan = runner.plan(snap)
+
+    with pytest.raises(ValueError, match="scene_id"):
+        runner.records(replace(snap, scene_id=99), plan, None)
+    with pytest.raises(ValueError, match="scene_id"):
+        runner.records(snap, plan, replace(plan.work, scene_id=99))
+
+
+def test_records_reject_duplicate_apple_executions(config):
+    from dataclasses import replace
+
+    runner = runner_for(config, RecordingMotionAdapter())
+    snap = Scene()()
+    plan = runner.plan(snap)
+    item = plan.work.items[0]
+
+    with pytest.raises(ValueError, match="apple_ids"):
+        runner.records(snap, plan, replace(plan.work, items=(item, item)))
+
+
+def test_infeasible_final_placement_records_no_free_cell(config):
+    from dataclasses import replace
+    from aple.schema import ExecResult, Phase
+
+    runner = runner_for(config, RecordingMotionAdapter())
+    snap = Scene()()
+    plan = runner.plan(snap)
+    item = next(it for it in plan.work.items if it.placement is not None)
+    done = replace(item, placement=replace(item.placement, feasible=False, cell_index=-1),
+                   execution=ExecResult(False, FailureCode.ABORTED, Phase.IDLE))
+
+    rows = runner.records(snap, plan, replace(plan.work, items=(done,)))
+    row = next(r for r in rows if r.apple_id == item.apple.apple_id)
+
+    assert row.fail_stage == FailStage.P1 and not row.success
+
+
 # ---------------------------------------------------------------- tools/run_cycle.py
 
 def save_scene(folder, n):

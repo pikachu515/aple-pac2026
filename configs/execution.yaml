@@ -6,6 +6,10 @@ execution:
   placement_verify: {height_tol_m: 0.010}   # PLACEHOLDER: 깊이 노이즈 실측 후 교체
   trajectory: {max_joint_step_rad: 0.05} # 라디안 단위 초기값, Piper/SIM 구간 검증 후 조정
   timeouts: {named_pose_s: 20.0, phase_a_s: 30.0, phase_b_s: 15.0, inspect_s: 30.0}
+  recovery:                    # 미끄러짐 복구 동작 (PR #15 합의: 전부 저속, 공중에서 그리퍼 열기 금지)
+    speed_scale: 0.2           # [임시] 복구 이동 속도. safety.speed_scale_max 이하여야 한다
+    width_watch: true          # 검사 중 뷰마다 그리퍼 폭 확인 (S8-6 1차 신호). 폭을 읽지 못하는 전송은 건너뜀
+    lost_grip_width_m: 0.01    # [임시] 측정 폭이 이 값 이하(완전히 닫힘)면 사과를 놓친 것 → 정지. 역할 D 실측(S8-6)과 맞출 것
   gripper:
     control_mode: fixed_effort
     close_speed: null

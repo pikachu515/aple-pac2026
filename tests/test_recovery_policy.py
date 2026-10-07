@@ -1,7 +1,7 @@
 import pytest
 
-from aple.orchestration.recovery import RecoveryAction, RecoveryPolicy
-from aple.schema import CaptureMode, FailureCode
+from aple.orchestration.recovery import RecoveryAction, RecoveryPolicy, is_lighting_fault
+from aple.schema import CaptureMode, FailureCode, LightingStatus, LightState
 
 
 @pytest.fixture
@@ -74,6 +74,27 @@ def test_lighting_fault_requests_recalibration(policy):
 
     assert decision.action == RecoveryAction.RECALIBRATE_LIGHT
     assert decision.alert
+
+
+@pytest.mark.parametrize(
+    "status, fault",
+    [
+        (LightingStatus(LightState.OK, 1.0, True), False),
+        (LightingStatus(LightState.CORRECTING, 4.0, True), False),
+        (LightingStatus(LightState.FAULT, 9.0, True), True),
+        (LightingStatus(LightState.FAULT, float("nan"), False), True),
+        (LightingStatus(LightState.OK, 1.0, False), True),
+    ],
+)
+def test_lighting_status_maps_to_fault_flag(policy, status, fault):
+    assert is_lighting_fault(status) is fault
+    expected = RecoveryAction.RECALIBRATE_LIGHT if fault else RecoveryAction.CONTINUE
+    assert policy.decide(lighting_fault=is_lighting_fault(status)).action == expected
+
+
+def test_lighting_fault_helper_rejects_non_status():
+    with pytest.raises(TypeError):
+        is_lighting_fault(None)
 
 
 def test_deferred_item_requires_explicit_recheck_capture_mode(policy):

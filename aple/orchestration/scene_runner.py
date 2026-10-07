@@ -29,9 +29,9 @@ import numpy as np
 from aple.execution.pick_place_pipeline import PickPlacePipeline, SceneWorkPlan
 from aple.inspection.coloration import params_from_config
 from aple.inspection.pipeline import inspect_scene
-from aple.orchestration.recovery import RecoveryDecision, RecoveryPolicy
+from aple.orchestration.recovery import RecoveryDecision, RecoveryPolicy, is_lighting_fault
 from aple.schema import (AppleDetection2D, AppleState, BoxOccupancy, CycleRecord, FailStage, FailureCode,
-                         Grade, GradeResult, InspectionPolicy, LightingStatus, LightState, RejectReason,
+                         Grade, GradeResult, InspectionPolicy, LightingStatus, RejectReason,
                          SceneSnapshot, TaskAction)
 
 _LOG = logging.getLogger(__name__)
@@ -56,10 +56,6 @@ class ScenePlan:
     blocked: str | None = None                 # "lighting" | "no_apples"
     recovery: RecoveryDecision | None = None
     timings: dict[str, float] = field(default_factory=dict)
-
-
-def is_lighting_fault(light: LightingStatus | None) -> bool:
-    return light is not None and (light.light_state == LightState.FAULT or not light.card_valid)
 
 
 class SceneRunner:
@@ -108,7 +104,7 @@ class SceneRunner:
         grades = tuple(inspect_scene(snap, list(dets), list(apples), self._params, light=light,
                                      policy=self._policy, gripper_range_mm=self._gripper_range_mm)) if dets else ()
         boxes = tuple(self._boxes(snap))
-        if is_lighting_fault(light):
+        if light is not None and is_lighting_fault(light):
             decision = self._recovery.decide(lighting_fault=True)
             _LOG.warning("lighting fault (ΔE %.1f) — not executing scene %d; %s",
                          light.delta_e, snap.scene_id, decision.action.value)
@@ -185,10 +181,10 @@ class SceneRunner:
 
 
 def _fail_stage(item, ex) -> FailStage:
+    if item.task.action == TaskAction.PICK_PLACE and (item.placement is None or not item.placement.feasible):
+        return FailStage.P1                     # 놓을 칸이 없어 실행하지 않았다 (상자 위치 미설정 포함)
     if ex is None or ex.success:
         return FailStage.NONE
-    if item.placement is not None and not item.placement.feasible:
-        return FailStage.P1
     return {FailureCode.IK_FAIL: FailStage.F1, FailureCode.HOVER_NOT_REACHED: FailStage.F1,
             FailureCode.NO_CONTACT: FailStage.F2, FailureCode.SLIP: FailStage.F2,
             FailureCode.NOT_HOLDING: FailStage.F2, FailureCode.DROP: FailStage.F3}.get(ex.failure_code, FailStage.F4)

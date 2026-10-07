@@ -205,3 +205,20 @@ def test_run_cycle_saves_live_scenes_and_replays_with_override(config, tmp_path,
     with pytest.raises(SystemExit, match="오타"):
         run_cycle.main(["--replay", str(tmp_path / "field"), "--set", "inspection.no_such_key=1"],
                        make_runner=runner)
+
+
+def test_real_m1_modules_through_from_config(config):
+    """#13 의 실제 M1 (검출·3D 위치·상자·파지 후보) 로 같은 합성 장면을 돌린다."""
+    config["workcell"]["T_base_camera"] = T_BASE_CAM.tolist()
+    adapter = RecordingMotionAdapter()
+    runner = SceneRunner.from_config(config, PickPlacePipeline(config, adapter))
+    plan = runner.plan(Scene()())
+    assert len(plan.apples) == 3
+    for a, truth in zip(sorted(plan.apples, key=lambda a: a.center_m[0]), APPLES):
+        assert np.allclose(a.center_m, to_base(truth.center), atol=0.003)       # 3D 위치
+        assert a.diameter_m == pytest.approx(2 * RADIUS, abs=0.003)
+    ratios = [g.ratio for g in sorted(plan.grades, key=lambda g: g.apple_id)]
+    assert ratios == sorted(ratios)                                            # 왼쪽부터 착색 적음 → 많음
+    # 상자 위치(origin_m)가 설정 전이면 상자를 재지 않는다 → 놓을 칸 없음 → 실행하지 않고 P1 로 남긴다
+    records = runner.records(plan.snapshot, plan, runner.execute(plan))
+    assert adapter.calls == [] and all(r.fail_stage == FailStage.P1 and not r.success for r in records)

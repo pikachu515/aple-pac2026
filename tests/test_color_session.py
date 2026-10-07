@@ -225,3 +225,14 @@ def test_repeat_measures_judgment_repeatability(tmp_path):
         assert rec["n"] == 5 and rec["grade_agreement"] == 1.0
     assert s["worst_std"] < 0.01                                       # 1%p 미만
     assert (tmp_path / "rep" / "_analysis" / "repeat.csv").exists()
+
+
+def test_truth_uses_every_pose_as_a_top_view_sample(truth):
+    root, patterns = truth
+    rows, s = cs.truth_root(root, None, cs.params("fuji"))
+    assert s["samples"] == 3 * 6 and len(s["views"]) == 18
+    cs.cmd_truth(root, None, "fuji")
+    views_csv = root / "_analysis" / "truth_views.csv"
+    assert views_csv.exists()
+    out = cs.cmd_curve(views_csv, None, "fuji")                       # 자세별 표본으로 곡선
+    assert out["curve"][0].n == 18

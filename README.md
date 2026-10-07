@@ -29,6 +29,7 @@ M4 공정 관리        상태 기계 · 예외 처리 · 사이클 기록      
 | `docs/interfaces.md` | 자동 생성 | 데이터 계약 다이어그램 — **[보기](docs/interfaces.md)** |
 | `docs/architecture.md` | 공동 | 설계서 노드 ↔ 코드 대응, 필수 / 확장 / 대회 후 구분 |
 | `docs/piper_studio_integration.md` | 공동 | Piper Studio 영상·깊이·회색 카드·조명 감시 연동 조사 결과 |
+| `docs/data_collection.md` | 공동 | 사과 몇 개로 데이터 모으기 — 촬영 목록, 깊이 자동 라벨, 붙여넣기 증강, Piper Studio 업로드 |
 | `docs/strategy.md` | 변승호 | 전략 종합 — 설계 원칙, 역할 분담, 시스템 순서별 전략, 대회 운영 절차 |
 | `aple/hal/` | 역할 A·B | Piper Studio 연동, 카메라–로봇 캘리브레이션 |
 | `aple/perception/` | 역할 A | 검출, 3D 위치·직경, 상자 점유·적재 검증 |
@@ -91,6 +92,7 @@ python tools/capture_snapshot.py --out data/snapshots/<날짜_장소>   # 개발
 python tools/color_session.py analyze data/snapshots/<날짜_장소>  # 착색비율·등급 (역할 C, docs/inspection_bench.md)
 python tools/judge_live.py                                       # Piper Studio 켠 채로 실시간 판정 (공유 메모리)
 python tools/make_figures.py                                     # 발표용 설계 근거 그림 (data/figures/)
+python tools/make_yolo_dataset.py <스냅샷 폴더들> --out data/yolo/apple_v1   # 깊이 자동 라벨 + 증강 → YOLO 데이터셋
 ```
 
 Piper Studio가 D435를 사용 중이면 장치가 점유되어 열리지 않는다. 점검은 Piper Studio 카메라 데몬을 멈춘 상태에서 수행한다.

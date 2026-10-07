@@ -30,6 +30,18 @@ def test_simulation_cannot_be_combined_with_hardware_execution():
         run_cycle.main(['--simulate', '--execute'])
 
 
+def test_empty_finger_preopening_is_allowed_but_missed_apple_close_fails():
+    pytest.importorskip('piper_robot.kinematics')
+    cfg = simulation_config(load_config(), OVERLAY)
+    cfg['piper_web']['gripper_width_range_m'] = [.044, .112]
+    cfg['execution']['gripper']['opening_margin_m'] = .02
+    world, _, _ = build_simulation(cfg)
+    assert world.set_gripper_width(.084, 1000, timeout_s=1)
+    assert world.held is None
+    assert not world.set_gripper_width(.064, 1000, timeout_s=1)
+    assert world.held is None
+
+
 def test_actual_piper_roundtrip_with_zero_and_nonzero_offset():
     module = pytest.importorskip('piper_robot.kinematics')
     cfg = simulation_config(load_config(), OVERLAY)

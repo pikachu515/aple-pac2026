@@ -10,6 +10,8 @@ import math
 import time
 from typing import Callable, Protocol
 
+import numpy as np
+
 from aple.execution.goal_builder import (
     MotionTargets,
     PickTargets,
@@ -91,6 +93,14 @@ class PiperTrajectoryMotionAdapter:
         if limits is None:
             raise ValueError("safety.joint_limits_rad must be measured before scripted motion")
         step = cfg["execution"]["trajectory"]["max_joint_step_rad"]
+        cartesian_step = cfg["execution"]["trajectory"].get("max_cartesian_step_m")
+        if isinstance(cartesian_step, bool):
+            raise ValueError("max_cartesian_step_m must be a positive finite number or null")
+        self._cartesian_step_m = (
+            None if cartesian_step is None else JointTrajectoryPlanner._positive_finite(
+                cartesian_step, "max_cartesian_step_m"
+            )
+        )
         self._planner = JointTrajectoryPlanner(
             ik_solver,
             segment_validator,
@@ -418,17 +428,36 @@ class PiperTrajectoryMotionAdapter:
         self._validate_speed_scale(speed_scale)
         current = self._transport.joint_state()
         for pose in poses:
-            trajectory = self._planner.plan(
-                (ToolPose(pose.position_m, pose.orientation_xyzw),), current
-            )
-            for joints in trajectory.points_rad:
-                if not self._transport.move_joint_goal(
-                    joints,
-                    speed_scale=speed_scale,
-                    timeout_s=self._remaining(deadline),
-                ):
-                    raise TimeoutError("Piper joint goal did not reach its target")
-                current = joints
+            step = self._cartesian_step_m
+            waypoints = (pose,)
+            if step is not None:
+                start_pose = self._transport.tool_pose()
+                distance = math.dist(start_pose.position_m, pose.position_m)
+                count = max(1, math.ceil(distance / step))
+                a = np.asarray(start_pose.orientation_xyzw, dtype=float)
+                b = np.asarray(pose.orientation_xyzw, dtype=float)
+                if np.dot(a, b) < 0:
+                    b = -b
+                values = []
+                for i in range(1, count + 1):
+                    t = i / count
+                    orientation = (1-t) * a + t * b
+                    orientation /= np.linalg.norm(orientation)
+                    position = tuple((1-t)*x + t*y for x, y in zip(start_pose.position_m, pose.position_m))
+                    values.append(Pose3D(position, tuple(orientation)))
+                waypoints = tuple(values)
+            for waypoint in waypoints:
+                trajectory = self._planner.plan(
+                    (ToolPose(waypoint.position_m, waypoint.orientation_xyzw),), current
+                )
+                for joints in trajectory.points_rad:
+                    if not self._transport.move_joint_goal(
+                        joints,
+                        speed_scale=speed_scale,
+                        timeout_s=self._remaining(deadline),
+                    ):
+                        raise TimeoutError("Piper joint goal did not reach its target")
+                    current = joints
 
     @staticmethod
     def _deadline(timeout_s: float) -> float:

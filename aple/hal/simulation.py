@@ -116,12 +116,22 @@ class KinematicWorld:
             candidates = [i for i, a in enumerate(self.apples)
                           if np.linalg.norm(np.asarray(a['center_m']) - tcp.position_m) <= self.tolerance
                           and abs(2 * a['radius_m'] - width_m) <= self.tolerance]
+            size_matches = any(abs(2*a['radius_m'] - width_m) <= self.tolerance for a in self.apples)
+            if not candidates and not size_matches:
+                # Repositioning empty fingers to a pre-open width is a valid
+                # command, even if narrower than the maximum opening.
+                self.width = width_m
+                self.events.append(dict(action='gripper', width_m=width_m, effort=effort,
+                                        virtual_time_s=self.elapsed_s))
+                return True
             if len(candidates) != 1:
                 return False
             self.held = candidates[0]
             self.apple_in_tcp = relative_pose(tcp, Pose3D(tuple(self.apples[self.held]['center_m']), (0, 0, 0, 1)))
             self.events.append(dict(action='grasp', apple_index=self.held))
         self.width = width_m
+        self.events.append(dict(action='gripper', width_m=width_m, effort=effort,
+                                virtual_time_s=self.elapsed_s))
         return True
 
     def capture_in_hand(self, *args, **kwargs):

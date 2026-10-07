@@ -31,7 +31,11 @@ class RecordingMotionAdapter:
     named_pose_success: bool = True
     inspect_success: bool = True
     captured_views: int | None = None
+    gripper_width: float | None = None
     calls: list[tuple[str, dict]] = field(default_factory=list)
+
+    def gripper_width_m(self) -> float | None:
+        return self.gripper_width
 
     def move_named(self, name: str, joint_target_rad: tuple[float, ...], *,
                    speed_scale: float, timeout_s: float) -> bool:
@@ -122,7 +126,7 @@ class RecordingMotionAdapter:
         return self.phase_a_result
 
     def inspect_views(self, profile: GraspProfile, inspection_plan: InspectionPlan, *,
-                      effort: int, timeout_s: float) -> InspectionPhaseResult:
+                      effort: int, timeout_s: float, view_check=None) -> InspectionPhaseResult:
         self.calls.append(("inspect_views", {
             "apple_id": profile.apple_id,
             "inspection_plan": inspection_plan,

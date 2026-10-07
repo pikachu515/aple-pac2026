@@ -107,12 +107,12 @@ def test_slip_decision_first_slip_retries_grasp_once(cfg):  # noqa: F811
     assert out.held.regraded_grade is None
 
 
-def test_slip_decision_second_slip_safe_stops(cfg):  # noqa: F811
+def test_slip_decision_second_slip_places_reject_and_alerts(cfg):  # noqa: F811
     from aple.orchestration.recovery import RecoveryAction, RecoveryPolicy
 
     pipeline, held = _slipped_held(cfg)
     out = pipeline.regrade_with_slip_decision(held, P, RecoveryPolicy(cfg), slip_retry_count=1)
-    assert out.decision.action == RecoveryAction.SAFE_STOP_AND_ALERT
+    assert out.decision.action == RecoveryAction.PLACE_REJECT_AND_ALERT
     assert out.decision.alert
 
 

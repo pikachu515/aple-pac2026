@@ -1,5 +1,7 @@
 # 장치 없는 Piper 동작 시뮬레이션
 
+Piper Studio 웹 가상 팔에서 계획된 궤적을 보려면 [Studio 웹 재생 안내](studio_simulation.md)를 따른다.
+
 ```bash
 # Piper Studio 저장소의 robot/ 안에 piper_robot/kinematics.py와 data/arm_geometry.npz가 있어야 한다.
 PYTHONPATH=/path/to/wego-piper-web/robot python3 tools/run_cycle.py \

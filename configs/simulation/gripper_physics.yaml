@@ -1,0 +1,37 @@
+# ASSUMPTIONS ONLY: not a reconstruction of the photo or measured hardware.
+# The photo's D1-D4 remain point distances in configs/gripper_attachment.yaml.
+assumed_gripper:
+  flange_tcp_m: [0, 0, 0.16]
+  closed_contact_gap_m: 0.044
+  finger_stroke_m: 0.034        # Studio 0.5.12 stock prismatic joints, each finger
+  cup_radius_m: 0.035          # assumed concave padded contact surface
+  cup_grid_offsets_m: [-0.020, 0, 0.020]
+  pad_radius_m: 0.003
+  pad_friction: [0.8, 0.02, 0.001]
+  pad_solref: [0.005, 1.0]
+  pad_mass_kg: 0.004
+  shaft_radius_m: 0.004
+  shaft_mass_kg: 0.025
+  finger_servo_kp_n_m: 1200
+  finger_force_limit_n: 5.0    # assumed per-finger linear force; not Studio torque Nm
+  closing_compression_m: 0.004
+  gripper_settle_s: 0.4
+  final_settle_s: 1.0
+  apple_mass_kg: 0.15
+  apple_friction: [0.8, 0.02, 0.001]
+  joint_arrival_tolerance_rad: 0.02
+  max_goal_settle_s: 1.0
+  lift_threshold_m: 0.015
+  destination_xy_tolerance_m: 0.012
+  # Virtual planning parameters for clearance within the stock joint-5 limit.
+  tool_down_rpy_deg: [0, 160, 0]
+  lift_height_m: 0.08
+  hover_margin_m: 0.07
+  cartesian_step_m: 0.01
+  opening_margin_m: 0.020
+  finger_envelope_thickness_m: 0.020
+  finger_envelope_width_m: 0.046
+  tray_size_m: [0.20, 0.32]    # assumed virtual tray footprint; actual tray dimensions remain unchanged
+  side_camera_position_m: [0.45, -0.75, 0.30]
+  side_camera_target_m: [0.24, 0, 0.16]
+  side_camera_fovy_deg: 45

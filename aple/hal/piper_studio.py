@@ -1,4 +1,4 @@
-"""Piper Web v0.5.9 HTTP adapter.
+"""Piper Web jog adapter with v0.5.12 read-only gripper torque verification.
 
 This uses Piper Web's version-specific authenticated robot jog endpoints. Jog
 commands pass through Piper Web's robotd safety filter; this client never opens
@@ -29,7 +29,6 @@ from aple.schema import ArmCommand, LightingStatus, SceneSnapshot
 _LOG = logging.getLogger(__name__)
 
 JOINT_NAMES = tuple(f"joint{index}" for index in range(1, 7))
-PIPER_WEB_FIXED_GRIPPER_EFFORT = 1000
 
 
 class PiperWebError(RuntimeError):
@@ -97,7 +96,7 @@ class _EstopKeepAlive:
 
 
 class PiperStudio:
-    """Synchronous client for the Piper Web v0.5.9 jog API."""
+    """Synchronous jog client requiring v0.5.12 torque readback for control."""
 
     def __init__(
         self,
@@ -107,7 +106,10 @@ class PiperStudio:
         snapshot_provider: SnapshotProvider | None = None,
         lighting_status_provider: LightingStatusProvider | None = None,
     ) -> None:
+        from aple.execution.gripper_geometry import apply_attachment_geometry
+        cfg = apply_attachment_geometry(cfg)
         self.cfg = cfg["piper_web"]
+        self._expected_gripper_effort = cfg.get("execution", {}).get("gripper", {}).get("fixed_effort")
         self._enabled = self.cfg.get("enabled", False)
         self._base_url = str(self.cfg["base_url"]).rstrip("/")
         self._iface = self.cfg.get("iface")
@@ -170,6 +172,41 @@ class PiperStudio:
         if not all(math.isfinite(value) for value in (closed_m, open_m)) or closed_m < 0 or open_m <= closed_m:
             raise ValueError("piper_web.gripper_width_range_m must be finite and increasing")
         return closed_m + normalized / 100.0 * (open_m - closed_m)
+
+    def gripper_torque_nm(self) -> float:
+        """Read robotd's configured torque (N·m), not measured fruit contact force."""
+        self._require_enabled()
+        self._ensure_authenticated(require_control=False)
+        result = self._request(
+            "GET", f"/api/robots/gripper-effort?iface={quote(self._iface, safe='')}"
+        )
+        if (not isinstance(result, dict) or result.get("iface") != self._iface
+                or result.get("supported") is False):
+            raise PiperWebError("Piper Web returned invalid or unsupported gripper torque")
+        torque = result.get("effort_nm")
+        if (isinstance(torque, bool) or not isinstance(torque, (int, float))
+                or not math.isfinite(torque) or not 0 <= torque <= 5):
+            raise PiperWebError("Piper Web gripper effort_nm must be finite and within 0..5 N·m")
+        return float(torque)
+
+    def verify_gripper_torque(self) -> float:
+        """Fail closed on unknown/mismatched torque. Never write Studio settings.
+
+        SDK effort is an integer in 0.001 N·m units. Compare using robotd's same
+        rounding, rather than interpreting the setting as grip force in N.
+        """
+        expected = self._expected_gripper_effort
+        if (isinstance(expected, bool) or not isinstance(expected, int)
+                or not 0 <= expected <= 5000):
+            raise PiperWebError("Set execution.gripper.fixed_effort to an integer 0..5000")
+        actual = self.gripper_torque_nm()
+        if int(round(actual * 1000)) != expected:
+            raise PiperWebError(
+                f"Gripper torque mismatch: Studio {actual:g} N·m, "
+                f"expected {expected / 1000:g} N·m. Confirm the torque in Studio "
+                "and execution.gripper.fixed_effort before executing; no setting was changed"
+            )
+        return actual
 
     def snapshot(self, *args, **kwargs):
         if self._snapshot_provider is None:
@@ -251,11 +288,9 @@ class PiperStudio:
         self._require_robotd_safety_confirmation()
         joints = self._normalize_joint_target(cmd.position_rad)
         gripper = self._normalize_gripper_width(cmd.gripper_width_m)
-        if cmd.gripper_effort != PIPER_WEB_FIXED_GRIPPER_EFFORT:
-            raise PiperWebError(
-                "Piper Web v0.5.9 robotd hard-codes GripperCtrl effort to 1000; "
-                "change the Piper Web robotd implementation before tuning this value"
-            )
+        if (isinstance(cmd.gripper_effort, bool) or not isinstance(cmd.gripper_effort, int)
+                or cmd.gripper_effort != self._expected_gripper_effort):
+            raise PiperWebError("command effort must match execution.gripper.fixed_effort")
         target = {**joints, "gripper": gripper}
         timeout = (
             self._goal_timeout_s
@@ -325,7 +360,7 @@ class PiperStudio:
         timeout_s = self._positive_number(timeout_s, "timeout_s")
         with self._lock:
             self._ensure_authenticated(require_control=True)
-            iface = quote(self._iface, safe="")
+            self.verify_gripper_torque()  # before acquiring any jog session
             keepalive = self._start_estop_keepalive()
             started = False
             operation_error: Exception | None = None
@@ -341,6 +376,7 @@ class PiperStudio:
                     raise PiperWebError("Piper Web did not confirm ownership of the jog session")
                 deadline = time.monotonic() + timeout_s
                 for target in targets:
+                    self.verify_gripper_torque()  # no cached assumption after a UI change
                     goal_result = self._request(
                         "POST", "/api/robots/jog/goal",
                         {"iface": self._iface, "values": target},
@@ -350,6 +386,7 @@ class PiperStudio:
                     target_rad = self._denormalize_joint_target(target)
                     while True:
                         keepalive.check()
+                        self.verify_gripper_torque()
                         current, gripper_position = self._read_raw_state()
                         joints_reached = all(
                             abs(actual - expected) <= self._arrival_tolerance_rad

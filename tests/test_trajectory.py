@@ -6,6 +6,7 @@ import pytest
 from aple.execution.trajectory import (
     JointTrajectoryPlanner,
     PiperKinematicsIKSolver,
+    PiperTCPTransform,
     ToolPose,
     TrajectoryPlanningError,
 )
@@ -134,7 +135,7 @@ def test_piper_ik_adapter_converts_pose_and_passes_seed():
         calls.append((target.copy(), seed.copy()))
         return {"ok": True, "q": (0.1, 0.2, 0.3, 0.4, 0.5, 0.6)}
 
-    solver = PiperKinematicsIKSolver(ik)
+    solver = PiperKinematicsIKSolver(ik, tcp_transform=PiperTCPTransform((0.0, 0.0, 0.0)))
     result = solver.solve(
         ToolPose((0.3, -0.2, 0.4), (0.0, 0.0, 2**-0.5, 2**-0.5)),
         (0.0, 0.1, 0.2, 0.3, 0.4, 0.5),
@@ -153,7 +154,8 @@ def test_piper_ik_adapter_converts_pose_and_passes_seed():
 
 def test_piper_ik_adapter_returns_no_solution_without_fabricating_joints():
     solver = PiperKinematicsIKSolver(
-        lambda _target, _seed: {"ok": False, "q": (0.0,) * 6}
+        lambda _target, _seed: {"ok": False, "q": (0.0,) * 6},
+        tcp_transform=PiperTCPTransform((0.0, 0.0, 0.0)),
     )
 
     assert solver.solve(pose(0.1), (0.0,) * 6) is None
@@ -168,7 +170,7 @@ def test_piper_ik_adapter_returns_no_solution_without_fabricating_joints():
     ],
 )
 def test_piper_ik_adapter_rejects_invalid_success_payloads(result):
-    solver = PiperKinematicsIKSolver(lambda _target, _seed: result)
+    solver = PiperKinematicsIKSolver(lambda _target, _seed: result, tcp_transform=PiperTCPTransform((0.0, 0.0, 0.0)))
 
     with pytest.raises(RuntimeError, match="Piper IK"):
         solver.solve(pose(0.1), (0.0,) * 6)

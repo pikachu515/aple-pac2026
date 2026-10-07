@@ -166,7 +166,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | grasp_planner (yaw 선택) | — | 확장 (사과 간격이 좁을 때) |
 | arm_occlusion_masker | 스냅샷 전 팔을 scan 자세로 보내는 규칙으로 대체 | 대회 후 |
 | pipeline_scheduler | — | 대회 후 |
-| sim_bridge | — | 대회 후 |
+| sim_bridge | `hal/simulation.py`, `tools/run_cycle.py --simulate` | 장치 없는 Piper 기구학 통합 시험 — 동역학·실기 검증은 별도 |
 | reject_curve_evaluator | `inspection/evaluation.py`, `tools/color_session.py curve` | 확장 — ✅ 구현·검증 |
 | report_generator | 노트북 분석 | 확장 |
 
@@ -181,6 +181,13 @@ backend를 전달한다. 첫 미끄러짐 후 `capture_for_retry`로 새 탑뷰�
 계획한다. 실행 실패 뒤에는 자동 재실행하지 않는다. 최종 등급·적재 대상 및 실패 phase를
 기록에 반영한다. 공급자 조립과 PR 요청 대조는 [pr_review_audit.md](pr_review_audit.md) 참조.
 이 연결은 실기 검증 완료를 뜻하지 않으며 역할 A/C 공급자·실측 FK·안전 설정은 별도 필요하다.
+
+TCP 보정은 `execution/trajectory.py`의 `build_piper_kinematics(cfg)`에서 IK/FK에 공통 적용한다.
+`workcell.tcp_offset_m`은 플랜지 좌표계의 실측 [x, y, z] m이고 TCP 축은 플랜지 축과 같다.
+null이면 구성 단계에서 거부한다. IK에는 TCP 목표를 플랜지 목표로 변환해 넘기며 FK는
+Piper `link_transforms`의 `link6` 플랜지에 같은 오프셋을 곱해 base_link TCP `Pose3D`를 만든다.
+그 FK 객체 하나를 파지와 인핸드 공급자에 전달한다. 관절 입력은 이미 rad이며 추가 단위 변환은 없다.
+합성 모델 왕복 테스트는 실제 Piper 수치 IK 및 현장 TCP 실측 검증을 대신하지 않는다.
 
 ## 4. Piper Studio 연동 시 확인할 것
 
@@ -217,3 +224,11 @@ joint waypoint 를 더 잘게 쪼개 감속을 근사하지만, 이건 실증된
 측정 TCP 자세, 마스크와 사과 좌표계 회전을 가져야 한다. 현재 재등급 구현은 이를
 기존 `InHandView` 누적기와 판정기로 흘려보내며, 상자 점유는 집기 전 장면의 데이터로
 계획한다. 이 장면 간 연결을 공유 계약에 반영할지는 팀 리뷰에서 확인한다.
+
+장치 없는 기본 통합 실행은 `tools/run_cycle.py --simulate`로 제공한다. 실제 Piper 수학 모델과
+`PiperSegmentValidator`를 사용하며, 별도 가상 설정으로 M1→M2→M5→M3→M4를 실행한다.
+home/scan도 구간 검사를 거친다. 실행 방법·모델 버전·충돌 검사 범위는 [simulation.md](simulation.md) 참조.
+
+기존 움직이는 좌우 핑거에 장착하는 수제 어댑터는 `configs/gripper_attachment.yaml`에서
+관리한다. 사진의 점 사이 거리는 mm 참조값이며, 활성화된 장착 기하만 SI 단위로 변환해
+TCP·개폐 간격·파지 외형·추가 충돌 구에 연결한다. [장착 설정 안내](gripper_attachment.md) 참조.

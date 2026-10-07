@@ -161,6 +161,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | 미끄러짐 복구 동작 | `execution/pick_place_pipeline.py` `recover_from_slip` · `run_mode_b_item` | 확장 (모드 B) — 전부 저속(`execution.recovery.speed_scale`), 공중에서 그리퍼 열기 금지. 1회차 `RETRY_GRASP_ONCE`: 원래 트레이 자리에 낙하 ≤ `max_drop_m` 로 내려놓고 `rescan=True` (탑뷰 재촬영·재파지, 모드 B 결과 폐기, 탑뷰 등급 유지). 2회차 `PLACE_REJECT_AND_ALERT`: 리젝트 상자에 적재 후 알림·계속. 그리퍼가 완전히 닫힘(`lost_grip_width_m` 이하)이면 이동 없이 `SAFE_STOP_AND_ALERT` |
 | gripper_force_controller | `execution/gripper.py` | 확장 (FSR/힘 텔레메트리 사용 시) |
 | cycle_manager | `orchestration/cycle_manager.py` | 필수 (단순형) |
+| (M4 장면 실행기) | `orchestration/scene_runner.py` `SceneRunner` — CycleManager 의 plan·execute·records 를 각 역할 모듈로 채움 (조명 FAULT 면 실행 안 함 → RECALIBRATE_LIGHT). 실행 파일 `tools/run_cycle.py` (`--replay` 드라이런 · `--live` 판정·계획 · `--execute` 는 이슈 #24 부품이 들어온 뒤) | 필수 — ✅ 구현·검증 (합성, M1 은 #13) |
 | metrics_logger | `orchestration/metrics_logger.py` | 필수 |
 | grasp_planner (yaw 선택) | — | 확장 (사과 간격이 좁을 때) |
 | arm_occlusion_masker | 스냅샷 전 팔을 scan 자세로 보내는 규칙으로 대체 | 대회 후 |

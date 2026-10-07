@@ -276,3 +276,83 @@ def test_infeasible_final_placement_records_no_free_cell(config):
     row = next(r for r in rows if r.apple_id == item.apple.apple_id)
 
     assert row.fail_stage == FailStage.P1 and not row.success
+
+
+# ---------------------------------------------------------------- tools/run_cycle.py
+
+def save_scene(folder, n):
+    folder.mkdir(parents=True, exist_ok=True)
+    scene = Scene()
+    for i in range(n):
+        s = scene()
+        np.savez_compressed(folder / f"snap_{i:04d}.npz", color=s.color, depth_m=s.depth_m,
+                            intrinsics=np.array(s.intrinsics), stamp_s=s.stamp_s)
+
+
+def test_run_cycle_replay_dry_run(config, tmp_path, monkeypatch, capsys):
+    from tools import run_cycle
+    monkeypatch.setattr(run_cycle, "load_config", lambda: config)
+    save_scene(tmp_path / "desk", 2)
+    adapter = RecordingMotionAdapter()
+    records = run_cycle.main(["--replay", str(tmp_path / "desk")],
+                             make_runner=lambda c, p: runner_for(c, adapter))
+    out = capsys.readouterr().out
+    assert len(records) == 6 and adapter.calls == []
+    assert "드라이런 - 2 사이클" in out and "PICK_PLACE" in out
+
+
+def test_run_cycle_refuses_execution_until_parts_exist(config, monkeypatch, capsys):
+    from tools import run_cycle
+    monkeypatch.setattr(run_cycle, "load_config", lambda: config)
+    with pytest.raises(SystemExit) as e:
+        run_cycle.main(["--live", "--execute"], make_live_camera=lambda c: Scene())
+    out = capsys.readouterr().out
+    assert e.value.code == 2
+    assert "T_base_camera" in out and "tcp_offset_m" in out and "SegmentValidator" in out
+
+
+def test_run_cycle_live_plans_without_moving(config, monkeypatch, capsys):
+    from tools import run_cycle
+    monkeypatch.setattr(run_cycle, "load_config", lambda: config)
+    adapter = RecordingMotionAdapter()
+    records = run_cycle.main(["--live"], make_runner=lambda c, p: runner_for(c, adapter),
+                             make_live_camera=lambda c: Scene())
+    assert len(records) == 3 and adapter.calls == []
+
+
+def test_run_cycle_saves_live_scenes_and_replays_with_override(config, tmp_path, monkeypatch):
+    from tools import run_cycle
+    monkeypatch.setattr(run_cycle, "load_config", lambda: config)
+    adapter = RecordingMotionAdapter()
+    live = run_cycle.main(["--live", "--cycles", "2", "--save", str(tmp_path / "field")],
+                          make_runner=lambda c, p: runner_for(c, adapter), make_live_camera=lambda c: Scene())
+    assert len(list((tmp_path / "field").glob("*.npz"))) == 2                 # 현장 장면이 남았다
+    seen = {}
+
+    def runner(c, p):
+        seen["boundary"] = c["inspection"]["box_boundary"]
+        return runner_for(c, adapter)
+
+    again = run_cycle.main(["--replay", str(tmp_path / "field"), "--set", "inspection.box_boundary=특"],
+                           make_runner=runner)
+    assert seen["boundary"] == "특" and len(again) == len(live)               # 같은 장면, 값만 바꿔 재실행
+    with pytest.raises(SystemExit, match="오타"):
+        run_cycle.main(["--replay", str(tmp_path / "field"), "--set", "inspection.no_such_key=1"],
+                       make_runner=runner)
+
+
+def test_real_m1_modules_through_from_config(config):
+    """#13 의 실제 M1 (검출·3D 위치·상자·파지 후보) 로 같은 합성 장면을 돌린다."""
+    config["workcell"]["T_base_camera"] = T_BASE_CAM.tolist()
+    adapter = RecordingMotionAdapter()
+    runner = SceneRunner.from_config(config, PickPlacePipeline(config, adapter))
+    plan = runner.plan(Scene()())
+    assert len(plan.apples) == 3
+    for a, truth in zip(sorted(plan.apples, key=lambda a: a.center_m[0]), APPLES):
+        assert np.allclose(a.center_m, to_base(truth.center), atol=0.003)       # 3D 위치
+        assert a.diameter_m == pytest.approx(2 * RADIUS, abs=0.003)
+    ratios = [g.ratio for g in sorted(plan.grades, key=lambda g: g.apple_id)]
+    assert ratios == sorted(ratios)                                            # 왼쪽부터 착색 적음 → 많음
+    # 상자 위치(origin_m)가 설정 전이면 상자를 재지 않는다 → 놓을 칸 없음 → 실행하지 않고 P1 로 남긴다
+    records = runner.records(plan.snapshot, plan, runner.execute(plan))
+    assert adapter.calls == [] and all(r.fail_stage == FailStage.P1 and not r.success for r in records)

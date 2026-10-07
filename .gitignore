@@ -33,6 +33,3 @@ Thumbs.db
 
 # 개인 문서
 *.hwp
-
-# 실행 기록 (tools/run_cycle.py → orchestration.logging.csv_dir)
-logs/

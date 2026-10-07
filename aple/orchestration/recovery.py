@@ -21,6 +21,7 @@ class RecoveryAction(str, Enum):
     RECALIBRATE_LIGHT = "recalibrate_light"
     SKIP_AND_ALERT = "skip_and_alert"
     SAFE_STOP_AND_ALERT = "safe_stop_and_alert"
+    PLACE_REJECT_AND_ALERT = "place_reject_and_alert"
     STOP_AND_IDLE = "stop_and_idle"
     REEVALUATE_DEFERRED = "reevaluate_deferred"
 
@@ -63,6 +64,7 @@ class RecoveryPolicy:
         scene_ready: bool = True,
         estop: bool = False,
         lighting_fault: bool = False,
+        gripper_lost: bool = False,
         deferred: bool = False,
         deferred_capture_mode: CaptureMode | None = None,
     ) -> RecoveryDecision:
@@ -73,6 +75,7 @@ class RecoveryPolicy:
             (scene_ready, "scene_ready"),
             (estop, "estop"),
             (lighting_fault, "lighting_fault"),
+            (gripper_lost, "gripper_lost"),
             (deferred, "deferred"),
         ):
             if not isinstance(value, bool):
@@ -113,9 +116,13 @@ class RecoveryPolicy:
                 )
             return RecoveryDecision(RecoveryAction.SKIP_AND_ALERT, alert=True)
         if failure_code == FailureCode.SLIP:
+            if gripper_lost:
+                # 그리퍼가 이미 완전히 닫혔다 = 사과를 놓쳤다. 내려놓을 대상이 없으니 정지한다.
+                return RecoveryDecision(RecoveryAction.SAFE_STOP_AND_ALERT, alert=True)
             if slip_retry_count == 0:
                 return RecoveryDecision(RecoveryAction.RETRY_GRASP_ONCE)
-            return RecoveryDecision(RecoveryAction.SAFE_STOP_AND_ALERT, alert=True)
+            # 두 번째 미끄러짐: 공중에서 놓지 않고 리젝트 상자에 적재한 뒤 알림만 남기고 계속한다.
+            return RecoveryDecision(RecoveryAction.PLACE_REJECT_AND_ALERT, alert=True)
         if failure_code == FailureCode.DROP:
             if rescan_count < self._max_rescan:
                 return RecoveryDecision(

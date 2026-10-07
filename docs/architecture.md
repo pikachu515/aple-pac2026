@@ -157,7 +157,8 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | motion_executor, scripted_backend, soft_landing | `execution/motion_executor.py` | 필수 |
 | act_backend | `hal/piper_studio.py` `run_policy` | 필수 (병행) |
 | inspect_skill | `execution/motion_executor.py` `inspect` | 확장 (모드 B) |
-| 미끄러짐 복구 의도 | `execution/pick_place_pipeline.py` `regrade_with_slip_decision` | 확장 (모드 B) — `InHandSlip` 만 잡아 `FailureCode.SLIP` + `RecoveryPolicy` 결정을 반환. 재파지 동작은 하지 않는다 |
+| 미끄러짐 복구 의도 | `execution/pick_place_pipeline.py` `regrade_with_slip_decision` | 확장 (모드 B) — `InHandSlip` 만 잡아 `FailureCode.SLIP` + `RecoveryPolicy` 결정을 반환. 재파지 동작은 하지 않는다. 검사는 뷰마다 촬영 직후 실행(`inspect_held_apple`의 `view_check`) — 미끄러지면 남은 회전 중단, 깊이 점 부족은 같은 자세에서 1회 재촬영 후에도 확인 안 되면 미끄러짐 처리 |
+| 미끄러짐 복구 동작 | `execution/pick_place_pipeline.py` `recover_from_slip` · `run_mode_b_item` | 확장 (모드 B) — 전부 저속(`execution.recovery.speed_scale`), 공중에서 그리퍼 열기 금지. 1회차 `RETRY_GRASP_ONCE`: 원래 트레이 자리에 낙하 ≤ `max_drop_m` 로 내려놓고 `rescan=True` (탑뷰 재촬영·재파지, 모드 B 결과 폐기, 탑뷰 등급 유지). 2회차 `PLACE_REJECT_AND_ALERT`: 리젝트 상자에 적재 후 알림·계속. 그리퍼가 완전히 닫힘(`lost_grip_width_m` 이하)이면 이동 없이 `SAFE_STOP_AND_ALERT` |
 | gripper_force_controller | `execution/gripper.py` | 확장 (FSR/힘 텔레메트리 사용 시) |
 | cycle_manager | `orchestration/cycle_manager.py` | 필수 (단순형) |
 | (M4 장면 실행기) | `orchestration/scene_runner.py` `SceneRunner` — CycleManager 의 plan·execute·records 를 각 역할 모듈로 채움 (조명 FAULT 면 실행 안 함 → RECALIBRATE_LIGHT). 실행 파일 `tools/run_cycle.py` (`--replay` 드라이런 · `--live` 판정·계획 · `--execute` 는 이슈 #24 부품이 들어온 뒤) | 필수 — ✅ 구현·검증 (합성, M1 은 #13) |
@@ -171,7 +172,15 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 
 `aple/orchestration/cycle_manager.py` 는 하드웨어 독립형 사이클 실행기다. 캡처, 장면 계획(인식·판정 포함), 실행, `CycleRecord` 생성은 콜백으로 주입하며, 드라이런은 별도 replay/synthetic 캡처 공급자를 요구하고 실행·하드웨어 리셋 콜백을 호출하지 않는다. `orchestration.logging.csv_dir` 가 설정되어 있으면 `cycles.csv` 에 기록한다. 실제 Piper 캡처/FK 공급자 및 복구 정책과 콜백의 통합은 팀 검토 후 연결해야 한다.
 
-`aple/orchestration/recovery.py` 는 Notion M4.5 예외 규칙에 따른 복구 **의도**만 반환한다. 실제 재시도·재촬영·안전 복귀를 수행하지 않으므로, 실행에 연결하기 전에 카운터의 사이클 범위와 하드웨어별 안전 동작을 팀이 검토해야 한다. `GATE_VIOLATION`·E-stop은 즉시 `STOP_AND_IDLE`, 미정의 실패는 `SAFE_STOP_AND_ALERT`로 닫힌다.
+`aple/orchestration/recovery.py` 는 Notion M4.5 예외 규칙에 따른 복구 **의도**만 반환한다. 실제 재시도·재촬영·안전 복귀를 수행하지 않으므로, 실행에 연결하기 전에 카운터의 사이클 범위와 하드웨어별 안전 동작을 팀이 검토해야 한다. `GATE_VIOLATION`·E-stop은 즉시 `STOP_AND_IDLE`, 미정의 실패는 `SAFE_STOP_AND_ALERT`로 닫힌다. 미끄러짐 2회차는 정지가 아니라 `PLACE_REJECT_AND_ALERT`(리젝트 적재 후 계속)이고, 그리퍼가 이미 닫힌 미끄러짐(`gripper_lost=True`)만 `SAFE_STOP_AND_ALERT`다.
+
+`aple/orchestration/scene_runner.py` 는 PR #25 구조를 바탕으로 단계 콜백을 연결한다.
+조명 FAULT는 공용 `is_lighting_fault`로 확인해 실행을 막고, `execute_scene`에 검사 파라미터와
+backend를 전달한다. 첫 미끄러짐 후 `capture_for_retry`로 새 탑뷰·위치·점유를 받아 기존 탑뷰
+등급을 유지한 채 1회 재파지한다. 재촬영 후 이전 장면의 나머지 작업은 다음 사이클에서 새로
+계획한다. 실행 실패 뒤에는 자동 재실행하지 않는다. 최종 등급·적재 대상 및 실패 phase를
+기록에 반영한다. 공급자 조립과 PR 요청 대조는 [pr_review_audit.md](pr_review_audit.md) 참조.
+이 연결은 실기 검증 완료를 뜻하지 않으며 역할 A/C 공급자·실측 FK·안전 설정은 별도 필요하다.
 
 ## 4. Piper Studio 연동 시 확인할 것
 

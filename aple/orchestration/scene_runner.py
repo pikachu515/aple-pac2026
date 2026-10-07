@@ -21,18 +21,18 @@ from __future__ import annotations
 import logging
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Sequence
 
 import numpy as np
 
-from aple.execution.pick_place_pipeline import PickPlacePipeline, SceneWorkPlan
+from aple.execution.pick_place_pipeline import AppleWorkPlan, PickPlacePipeline, SceneWorkPlan
 from aple.inspection.coloration import params_from_config
 from aple.inspection.pipeline import inspect_scene
 from aple.orchestration.recovery import RecoveryDecision, RecoveryPolicy, is_lighting_fault
 from aple.schema import (AppleDetection2D, AppleState, BoxOccupancy, CycleRecord, FailStage, FailureCode,
                          Grade, GradeResult, InspectionPolicy, LightingStatus, RejectReason,
-                         SceneSnapshot, TaskAction)
+                         SceneSnapshot, TaskAction, Phase, Source, CaptureMode, ExecResult)
 
 _LOG = logging.getLogger(__name__)
 
@@ -61,12 +61,15 @@ class ScenePlan:
 class SceneRunner:
     def __init__(self, cfg: dict, pipeline: PickPlacePipeline, *, detect: DetectFn, estimate_apples: ApplesFn,
                  estimate_boxes: BoxesFn, plan_grasps: GraspsFn, light_for: LightFn | None = None,
-                 backend: str = "scripted", clock: Callable[[], float] = time.monotonic) -> None:
+                 backend: str | None = None, clock: Callable[[], float] = time.monotonic,
+                 capture_for_retry: Callable[[], SceneSnapshot] | None = None) -> None:
         self.cfg = cfg
         self.pipeline = pipeline
         self._detect, self._apples, self._boxes, self._grasps = detect, estimate_apples, estimate_boxes, plan_grasps
         self._light_for = light_for
-        self._backend = backend
+        self._backend = cfg["execution"]["default_backend"] if backend is None else backend
+        if self._backend not in ("scripted", "act"):
+            raise ValueError("backend must be scripted or act")
         self._clock = clock
         self._recovery = RecoveryPolicy(cfg)
         self._params = params_from_config(cfg)
@@ -74,6 +77,10 @@ class SceneRunner:
         mm = cfg["size_bins"]["gripper_range_mm"]
         self._gripper_range_mm = (float(mm[0]), float(mm[1]))
         self._prev_apples: list[AppleState] | None = None
+        if capture_for_retry is not None and not callable(capture_for_retry):
+            raise TypeError("capture_for_retry must be callable")
+        self._capture_for_retry = capture_for_retry
+        self._execution_halted = False
 
     @classmethod
     def from_config(cls, cfg: dict, pipeline: PickPlacePipeline, **kwargs) -> "SceneRunner":
@@ -123,12 +130,69 @@ class SceneRunner:
     def execute(self, plan: ScenePlan) -> SceneWorkPlan | None:
         if plan.work is None:
             return None
+        if plan.work.scene_id != plan.snapshot.scene_id:
+            raise ValueError("work plan must match the captured scene_id")
+        if self._execution_halted:
+            return replace(plan.work, items=tuple(
+                replace(item, execution=ExecResult(False, FailureCode.ABORTED, Phase.IDLE))
+                if item.task.action in (TaskAction.PICK_PLACE, TaskAction.PICK_INSPECT_PLACE) else item
+                for item in plan.work.items
+            ))
         t0 = self._clock()
-        result = self.pipeline.execute_scene(plan.work)
+        try:
+            result = self.pipeline.execute_scene(
+                plan.work, backend=self._backend, inspect_params=self._params, boxes=plan.boxes,
+                rescan_for_retry=(lambda item: self._retry_item(plan, item))
+                    if self._capture_for_retry is not None else None,
+            )
+        except Exception:
+            self._execution_halted = True
+            raise
+        self._execution_halted = any(
+            item.execution is not None and not item.execution.success for item in result.items
+        )
         plan.timings["t_exec_s"] = self._clock() - t0
         return result
 
+    def _retry_item(self, plan: ScenePlan, original: AppleWorkPlan):
+        """Recapture position/occupancy, retaining only this apple's original top grade.
+
+        The estimator must keep apple IDs across scenes. Never substitute another
+        apple when tracking fails. In-hand results are discarded by the pipeline.
+        """
+        assert self._capture_for_retry is not None
+        snap = self._capture_for_retry()
+        if (not isinstance(snap, SceneSnapshot) or snap.source != Source.TOP
+                or snap.capture_mode != CaptureMode.FULL
+                or snap.scene_id <= plan.snapshot.scene_id):
+            raise ValueError("slip recovery requires a fresh FULL TOP snapshot")
+        light = self._light_for(snap) if self._light_for is not None else None
+        if light is not None and is_lighting_fault(light):
+            raise ValueError("lighting fault during slip rescan; recalibrate before retry")
+        dets = tuple(self._detect(snap))
+        apples = tuple(self._apples(snap, dets, self._prev_apples))
+        matches = [a for a in apples if a.apple_id == original.apple.apple_id]
+        if len(matches) != 1:
+            raise ValueError("slip rescan must track exactly the original apple")
+        apple = matches[0]
+        top_grade = next(g for g in plan.grades if g.apple_id == apple.apple_id)
+        grade = replace(top_grade, scene_id=snap.scene_id, final=False)
+        boxes = tuple(self._boxes(snap))
+        grasps = tuple(self._grasps((apple,)))
+        work = self.pipeline.plan_scene((apple,), (grade,), boxes, grasps)
+        self._prev_apples = list(apples)
+        return work.items[0], boxes
+
     def records(self, snap: SceneSnapshot, plan: ScenePlan, execution: SceneWorkPlan | None) -> list[CycleRecord]:
+        if snap.scene_id != plan.snapshot.scene_id:
+            raise ValueError("record snapshot must match the planned scene_id")
+        if execution is not None and execution.scene_id != snap.scene_id:
+            raise ValueError("execution must match the recorded scene_id")
+        if execution is not None:
+            ids = [item.task.apple_id for item in execution.items]
+            planned_ids = {item.task.apple_id for item in plan.work.items} if plan.work is not None else set()
+            if len(set(ids)) != len(ids) or not set(ids) <= planned_ids:
+                raise ValueError("execution items must uniquely match planned apple_ids")
         grade_by_id = {g.apple_id: g for g in plan.grades}
         t_scan, t_plan = plan.timings.get("t_scan_s", 0.0), plan.timings.get("t_plan_s", 0.0)
         t_exec = plan.timings.get("t_exec_s", 0.0)
@@ -147,8 +211,13 @@ class SceneRunner:
             ex = done.execution
             success = ex is not None and ex.success
             code = ex.failure_code if ex is not None else FailureCode.NONE
-            rows.append(self._row(snap, item.task.apple_id, item.apple, grade_by_id.get(item.task.apple_id),
-                                  item, ex, success, code, _fail_stage(item, ex), t_scan, t_plan, t_exec))
+            infeasible = done.placement is not None and not done.placement.feasible
+            stage = FailStage.P1 if infeasible and not success else _fail_stage(done, ex)
+            if infeasible and execution is not None and ex is None:
+                code = FailureCode.ABORTED
+            rows.append(self._row(snap, item.task.apple_id, done.apple,
+                                  done.final_grade or grade_by_id.get(item.task.apple_id),
+                                  done, ex, success, code, stage, t_scan, t_plan, t_exec))
         return rows
 
     # ------------------------------------------------------------ 내부
@@ -181,10 +250,18 @@ class SceneRunner:
 
 
 def _fail_stage(item, ex) -> FailStage:
-    if item.task.action == TaskAction.PICK_PLACE and (item.placement is None or not item.placement.feasible):
-        return FailStage.P1                     # 놓을 칸이 없어 실행하지 않았다 (상자 위치 미설정 포함)
     if ex is None or ex.success:
         return FailStage.NONE
-    return {FailureCode.IK_FAIL: FailStage.F1, FailureCode.HOVER_NOT_REACHED: FailStage.F1,
-            FailureCode.NO_CONTACT: FailStage.F2, FailureCode.SLIP: FailStage.F2,
-            FailureCode.NOT_HOLDING: FailStage.F2, FailureCode.DROP: FailStage.F3}.get(ex.failure_code, FailStage.F4)
+    if item is not None and item.placement is not None and not item.placement.feasible:
+        return FailStage.P1
+    if ex.failure_code == FailureCode.DROP:
+        return FailStage.F3
+    if ex.failure_code in (FailureCode.NO_CONTACT, FailureCode.SLIP, FailureCode.NOT_HOLDING):
+        return FailStage.F2
+    if ex.phase_reached == Phase.IDLE and ex.failure_code in (FailureCode.ABORTED, FailureCode.GATE_VIOLATION):
+        return FailStage.NONE  # execution was held before any physical stage
+    if ex.phase_reached in (Phase.IDLE, Phase.APPROACH, Phase.DESCEND, Phase.MOVE_NAMED):
+        return FailStage.F1
+    if ex.phase_reached in (Phase.GRASP, Phase.LIFT, Phase.INSPECT):
+        return FailStage.F2
+    return FailStage.F4

@@ -82,6 +82,8 @@ class PiperTrajectoryMotionAdapter:
         ik_solver: IKSolver,
         segment_validator: SegmentValidator,
     ) -> None:
+        from aple.execution.gripper_geometry import apply_attachment_geometry
+        cfg = apply_attachment_geometry(cfg)
         self._transport = transport
         self._cfg = cfg
         safety = cfg["safety"]
@@ -110,9 +112,20 @@ class PiperTrajectoryMotionAdapter:
         timeout_s: float,
     ) -> bool:
         del name
-        return self._transport.move_joint_goal(
-            joint_target_rad, speed_scale=speed_scale, timeout_s=timeout_s
-        )
+        self._validate_speed_scale(speed_scale)
+        deadline = self._deadline(timeout_s)
+        current = self._transport.joint_state()
+        # Named moves need the same bounds and collision checks as Cartesian moves.
+        try:
+            trajectory = self._planner.plan_joint_goal(joint_target_rad, current)
+            for point in trajectory.points_rad:
+                if not self._transport.move_joint_goal(
+                    point, speed_scale=speed_scale, timeout_s=self._remaining(deadline)
+                ):
+                    return False
+        except (TrajectoryPlanningError, TimeoutError):
+            return False
+        return True
 
     def execute_phase_a(
         self,
@@ -447,6 +460,18 @@ def build_piper_motion_adapter(
 ) -> PiperTrajectoryMotionAdapter:
     """Assemble the scripted adapter on Piper Web with waypoint-subdivision slowdown."""
     from aple.hal.piper_studio import PiperStudioMotionTransport
+    from aple.execution.trajectory import (
+        PiperKinematicsIKSolver, PiperKinematicsFKProvider, PiperTCPTransform,
+    )
+
+    if isinstance(ik_solver, PiperKinematicsIKSolver):
+        measured = PiperTCPTransform.from_config(cfg)
+        if measured != ik_solver.tcp_transform:
+            raise ValueError("Piper IK transform must match workcell.tcp_offset_m")
+        if not isinstance(tool_pose_provider, PiperKinematicsFKProvider):
+            raise ValueError("Piper IK requires the FK provider from build_piper_kinematics")
+        if tool_pose_provider.tcp_transform != ik_solver.tcp_transform:
+            raise ValueError("Piper IK and FK must share the same measured TCP offset")
 
     transport = PiperStudioMotionTransport(
         studio,

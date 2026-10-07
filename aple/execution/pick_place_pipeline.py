@@ -145,6 +145,8 @@ class PickPlacePipeline:
 
         InHandCaptureProvider.begin 을 넘기면 뷰 촬영 전에 사과 크기·파지 위치를 알려 준다.
         """
+        from aple.execution.gripper_geometry import apply_attachment_geometry
+        cfg = apply_attachment_geometry(cfg)
         if inspection_begin is not None and not callable(inspection_begin):
             raise TypeError("inspection_begin must be callable")
         self._inspection_begin = inspection_begin

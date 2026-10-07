@@ -15,6 +15,7 @@ from typing import Protocol, Sequence
 import numpy as np
 
 from aple.schema import FailureCode
+from aple.execution.goal_builder import Pose3D
 
 JointVector = tuple[float, float, float, float, float, float]
 
@@ -118,6 +119,22 @@ class JointTrajectoryPlanner:
 
         return JointTrajectory(tuple(points), tuple(waypoint_end_indices))
 
+    def plan_joint_goal(self, goal_rad, start_joints_rad) -> JointTrajectory:
+        current = self._validate_joints(start_joints_rad, "start_joints_rad")
+        goal = self._validate_joints(goal_rad, "goal_rad")
+        self._validate_within_limits(current, "start_joints_rad")
+        self._validate_within_limits(goal, "goal_rad")
+        count = max(1, math.ceil(max(abs(b - a) for a, b in zip(current, goal))
+                                 / self._max_joint_step_rad))
+        points = []
+        for step in range(1, count + 1):
+            point = tuple(a + (b - a) * step / count for a, b in zip(start_joints_rad, goal))
+            if not self._segment_validator.is_segment_safe(current, point):
+                raise TrajectoryPlanningError(FailureCode.COLLISION, "unsafe named-pose segment")
+            points.append(point)
+            current = point
+        return JointTrajectory(tuple(points), (len(points) - 1,))
+
     @classmethod
     def _validate_joints(cls, values: Sequence[float], name: str) -> JointVector:
         if len(values) != 6:
@@ -178,7 +195,11 @@ class JointTrajectoryPlanner:
 class PiperKinematicsIKSolver:
     """Adapt Piper Studio's shared numerical IK function to ``IKSolver``."""
 
-    def __init__(self, ik_function: PiperIKFunction | None = None) -> None:
+    def __init__(self, ik_function: PiperIKFunction | None = None, *,
+                 tcp_transform: PiperTCPTransform | None = None) -> None:
+        if not isinstance(tcp_transform, PiperTCPTransform):
+            raise ValueError("a measured workcell.tcp_offset_m transform is required")
+        self.tcp_transform = tcp_transform
         self._ik_function = (
             ik_function if ik_function is not None else self._load_ik_function()
         )
@@ -194,6 +215,7 @@ class PiperKinematicsIKSolver:
             (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
         )
         target[:3, 3] = pose.position_m
+        target = target @ self.tcp_transform.inverse_matrix()
 
         result = self._ik_function(target, np.asarray(seed, dtype=float))
         if not isinstance(result, Mapping):
@@ -227,3 +249,108 @@ class PiperKinematicsIKSolver:
         if not callable(ik_function):
             raise RuntimeError("Piper's kinematics module does not expose ik()")
         return ik_function
+
+
+@dataclass(frozen=True)
+class PiperTCPTransform:
+    """Measured flange-frame translation in meters; TCP axes match flange axes."""
+
+    offset_m: tuple[float, float, float]
+
+    def __post_init__(self) -> None:
+        if self.offset_m is None:
+            raise ValueError("workcell.tcp_offset_m must be measured before using Piper IK/FK")
+        offset = np.asarray(self.offset_m, dtype=float)
+        if offset.shape != (3,) or not np.isfinite(offset).all():
+            raise ValueError("workcell.tcp_offset_m must contain three finite meters")
+        object.__setattr__(self, "offset_m", tuple(float(v) for v in offset))
+
+    @classmethod
+    def from_config(cls, cfg: dict) -> PiperTCPTransform:
+        from aple.execution.gripper_geometry import apply_attachment_geometry
+        cfg = apply_attachment_geometry(cfg)
+        return cls(cfg.get("workcell", {}).get("tcp_offset_m"))
+
+    def matrix(self) -> np.ndarray:
+        result = np.eye(4)
+        result[:3, 3] = self.offset_m
+        return result
+
+    def inverse_matrix(self) -> np.ndarray:
+        result = np.eye(4)
+        result[:3, 3] = -np.asarray(self.offset_m)
+        return result
+
+
+class PiperKinematicsFKProvider:
+    """Callable tool_pose_provider: six measured radians → base_link TCP Pose3D.
+
+    Piper's link_transforms returns a batch (1, links, 4, 4). Never apply
+    norm_to_rad here: PiperStudio.joint_state() has already converted raw mdeg.
+    """
+
+    def __init__(self, tcp_transform: PiperTCPTransform, *,
+                 link_transforms, tip_index: int) -> None:
+        if not isinstance(tcp_transform, PiperTCPTransform):
+            raise ValueError("a measured workcell.tcp_offset_m transform is required")
+        if not callable(link_transforms):
+            raise TypeError("link_transforms must be callable")
+        if isinstance(tip_index, bool) or not isinstance(tip_index, int) or tip_index < 0:
+            raise ValueError("tip_index must be a non-negative integer")
+        self.tcp_transform = tcp_transform
+        self._link_transforms = link_transforms
+        self._tip_index = tip_index
+
+    def __call__(self, joints_rad: Sequence[float]) -> Pose3D:
+        joints = JointTrajectoryPlanner._validate_joints(joints_rad, "joints_rad")
+        links = np.asarray(self._link_transforms(np.asarray(joints)[None, :]), dtype=float)
+        if (links.ndim != 4 or links.shape[0] != 1 or links.shape[2:] != (4, 4)
+                or self._tip_index >= links.shape[1]):
+            raise RuntimeError("Piper FK must return (1, links, 4, 4) including the flange tip")
+        flange = links[0, self._tip_index]
+        R = flange[:3, :3]
+        if (not np.isfinite(flange).all()
+                or not np.allclose(flange[3], (0, 0, 0, 1), atol=1e-6, rtol=0)
+                or not np.allclose(R.T @ R, np.eye(3), atol=1e-6, rtol=0)
+                or not math.isclose(float(np.linalg.det(R)), 1.0, abs_tol=1e-6)):
+            raise RuntimeError("Piper FK returned an invalid rigid flange transform")
+        tcp = flange @ self.tcp_transform.matrix()
+        return Pose3D(tuple(float(v) for v in tcp[:3, 3]), _rotation_quaternion(R))
+
+
+def _rotation_quaternion(R: np.ndarray) -> tuple[float, float, float, float]:
+    """Convert a validated rotation, including 180-degree rotations, to xyzw."""
+    trace = float(np.trace(R))
+    if trace > 0:
+        s = 2 * math.sqrt(1 + trace)
+        q = np.array([(R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s,
+                      (R[1, 0] - R[0, 1]) / s, s / 4])
+    else:
+        i = int(np.argmax(np.diag(R)))
+        j, k = (i + 1) % 3, (i + 2) % 3
+        s = 2 * math.sqrt(1 + R[i, i] - R[j, j] - R[k, k])
+        q = np.empty(4)
+        q[i], q[j], q[k], q[3] = s / 4, (R[j, i] + R[i, j]) / s, (R[k, i] + R[i, k]) / s, (R[k, j] - R[j, k]) / s
+    q /= np.linalg.norm(q)
+    return tuple(float(v) for v in q)
+
+
+def build_piper_kinematics(cfg: dict, *, kinematics_module=None):
+    """Create IK and a shared FK callable with one measured offset and geometry.
+
+    Pass the returned FK object unchanged to both tool_pose_provider and the
+    in-hand provider's tool_pose_fn. This loads math only, never robot devices.
+    """
+    transform = PiperTCPTransform.from_config(cfg)  # fail before loading runtime on null
+    module = kinematics_module or import_module("piper_robot.kinematics")
+    geometry = module.geometry()
+    if geometry.tip != "link6":
+        raise ValueError("Piper TCP offset requires link6 flange geometry")
+    ik = PiperKinematicsIKSolver(
+        lambda target, seed: module.ik(target, seed, geom=geometry), tcp_transform=transform,
+    )
+    fk = PiperKinematicsFKProvider(
+        transform, link_transforms=lambda q: module.link_transforms(q, geometry),
+        tip_index=geometry.tip_index,
+    )
+    return ik, fk

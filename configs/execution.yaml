@@ -15,7 +15,7 @@ execution:
     close_speed: null
     slip_width_m: 0.002
     opening_margin_m: 0.005    # 초기값: 사과 직경보다 5 mm 여유
-    fixed_effort: 1000         # Piper Web v0.5.9 고정 토크
+    fixed_effort: 1000         # 0.001 N·m 단위: 1000 = 1 N·m. v0.5.12 Studio 저장값과 일치해야 실행
 piper_web:
   enabled: false               # 실기 연결은 안전 설정과 follower iface 확인 후 명시적으로 활성화
   base_url: "http://127.0.0.1"   # Piper Web v0.5.9 는 80번 포트 (docs/environment.md)

@@ -123,7 +123,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | M1 인식 · 3D 위치 | apple_sorter_perception | `aple/perception` | 역할 A |
 | M2 색상 품질 판별 | apple_sorter_inspection | `aple/inspection` | 역할 C |
 | M3 로봇 실행 · 손상 방지 | apple_sorter_execution | `aple/execution` | 역할 B·D |
-| M4 공정 관리 | apple_sorter_orchestration, apple_sorter_eval | `aple/orchestration` | 통합 담당 |
+| M4 공정 관리 | apple_sorter_orchestration, apple_sorter_eval | `aple/orchestration` | 역할 D (강우담) |
 | M5 판단 · 계획 | apple_sorter_planning | `aple/planning` | 역할 B·D·A |
 
 ## 3. 노드 대응과 우선순위

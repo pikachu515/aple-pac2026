@@ -42,7 +42,7 @@ from aple.inspection.coloration import (InspectParams, measure_view, params_from
 from aple.inspection.evaluation import pick_delta_up, plot_curve, reject_curve  # noqa: E402
 from aple.inspection.grade_classifier import classify  # noqa: E402
 from aple.inspection.ref_patch import PatchCalib, calibrate_patches  # noqa: E402
-from aple.inspection.standalone import segment_apples  # noqa: E402
+from aple.inspection.standalone import find_apples  # noqa: E402
 from aple.schema import Grade, LightState  # noqa: E402
 
 GRADE_KO = {Grade.UPPER: "상", Grade.MIDDLE: "중", Grade.REJECT: "리젝트"}
@@ -52,6 +52,10 @@ LABEL_MAP = {"상": Grade.UPPER, "u": Grade.UPPER, "upper": Grade.UPPER,
 
 
 # ---------------------------------------------------------------- 공통
+
+# 사과 검출 가중치 — main 의 --weights (예: data/models/yolo11n.pt — COCO 면 apple 만). 없으면 깊이·모양만
+WEIGHTS: Path | None = None
+
 
 def load_snaps(folder: Path) -> list[tuple[Path, np.ndarray, np.ndarray, tuple]]:
     out = []
@@ -169,7 +173,7 @@ def analyze_folder(folder: Path, calib: CardCalib | None, p: InspectParams, save
         if light is not None and light.light_state != LightState.OK:
             print(f"[조명] {path.name}: 카드 색 변화 ΔE {light.delta_e:.1f} → {light.light_state.name}")
         try:
-            dets = segment_apples(color, depth, intr)
+            dets = find_apples(color, depth, intr, weights=WEIGHTS)
         except ValueError as e:
             print(f"[건너뜀] {path.name}: {e}")
             continue
@@ -217,7 +221,7 @@ def collect_apple_pixels(folder: Path, calib: CardCalib | None, p: InspectParams
     hs, cs = [], []
     for path, raw, depth, intr in load_snaps(folder):
         color = apply_gain(raw, calib)
-        for det in segment_apples(color, depth, intr):
+        for det in find_apples(color, depth, intr, weights=WEIGHTS):
             vm = measure_view(color, depth, det.mask, intr, p)
             if vm is None:
                 continue
@@ -275,7 +279,7 @@ def truth_root(root: Path, calib: CardCalib | None, p: InspectParams) -> tuple[l
         views = []
         for path, raw, depth, intr in load_snaps(d):
             color = apply_gain(raw, calib)
-            dets = segment_apples(color, depth, intr)
+            dets = find_apples(color, depth, intr, weights=WEIGHTS)
             if not dets:
                 print(f"[건너뜀] {d.name}/{path.name}: 사과를 찾지 못함")
                 continue
@@ -471,6 +475,7 @@ def main(argv: list[str] | None = None) -> None:
         b.add_argument("folder", type=Path)
         b.add_argument("--card", help="card.json 경로 (기본: 폴더 안 card.json)")
         b.add_argument("--variety", choices=["fuji", "hongro"])
+        b.add_argument("--weights", type=Path, help="사과 검출 가중치 (예: data/models/yolo11n.pt). 없으면 깊이·모양만")
         if name in ("suggest", "truth"):
             b.add_argument("--apply", action="store_true", help="제안값을 configs/varieties.yaml 에 바로 써 넣는다")
     c = sub.add_parser("compare")
@@ -485,6 +490,9 @@ def main(argv: list[str] | None = None) -> None:
     k.add_argument("--apply", action="store_true", help="제안 delta_up + 여유를 configs/varieties.yaml 에 써 넣는다")
     k.add_argument("--margin", type=float, default=0.03, help="--apply 때 제안값에 더할 여유 (기본 0.03)")
     args = ap.parse_args(argv)
+
+    global WEIGHTS
+    WEIGHTS = getattr(args, "weights", None)
 
     if args.cmd == "card":
         cmd_card(args.folder, args.roi, args.file)

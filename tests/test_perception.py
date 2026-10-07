@@ -174,6 +174,43 @@ def test_yolo_boxes_without_raised_object_are_rejected(cfg):
         assert max(iou(d.mask, who == i) for d in dets) > 0.9
 
 
+def test_tall_post_is_not_an_apple(cfg):
+    """의자 다리·로봇 팔처럼 직경보다 훨씬 높이 솟은 물체는 사과가 아니다 (2026-10-07 실측 오검출)."""
+    post = [(0.40, 0.435, 0.12, 0.155, 0.20)]               # 3.5 cm 각 기둥, 높이 20 cm
+    depth, _ = render(make_T(), APPLES3, tops=post)
+    dets = detector.detect(snap_of(depth), cfg)
+    assert len(dets) == 3
+
+
+def test_apple_cut_by_image_border_is_dropped(cfg):
+    T = make_T()
+    edge = pixel_to_base(2, 240, CAM_H, INTR, T)            # 영상 왼쪽 끝 열이 지나는 테이블 위치
+    depth, _ = render(T, APPLES3 + [apple_on_table(edge[0], edge[1], 0.036)])
+    dets = detector.detect(snap_of(depth), cfg)
+    assert len(dets) == 3
+    assert not any(d.bbox[0] == 0 for d in dets)
+
+
+def test_coco_weights_keep_only_apple_class(cfg, monkeypatch):
+    ultralytics = pytest.importorskip("ultralytics")
+    seen = {}
+
+    class FakeYOLO:
+        def __init__(self, weights):
+            seen["weights"] = weights
+
+        def predict(self, img, **kw):
+            seen.update(kw)
+            raise StopIteration
+
+    monkeypatch.setattr(ultralytics, "YOLO", FakeYOLO)
+    run = detector.load_yolo({"weights": "fake_coco.pt", "classes": [47], "conf": 0.4})
+    with pytest.raises(StopIteration):
+        run(np.zeros((8, 8, 3), np.uint8))
+    assert seen["classes"] == [47]
+    detector._MODEL_CACHE.pop("fake_coco.pt", None)
+
+
 def test_tray_roi_limits_detection(cfg):
     cfg["workcell"]["tray"]["center_m"] = [0.25, 0.0, 0.0]
     cfg["workcell"]["tray"]["size_m"] = [0.20, 0.22]        # x 0.15–0.35, y −0.11–0.11

@@ -11,7 +11,11 @@
 3-a. YOLO 가중치(yolo.weights)가 있으면: 상자마다 '솟은 픽셀 ∩ 상자 내접 타원', 상자끼리 겹친 픽셀은
      중심이 가까운 상자에 준다. 솟은 픽셀이 거의 없는 상자는 오검출로 버린다 (전략 S4-6).
 3-b. 없으면: 솟은 덩어리를 사과로 보고, 붙은 사과는 거리 변환 봉우리로 나눈다 (watershed).
-4. 투영 직경이 perception.detect.diam_range_m 밖이면 버린다. 번호는 위→아래, 왼→오 (det_id 1부터).
+4. 투영 직경이 perception.detect.diam_range_m 밖이면 버린다. 모양도 본다 (_apple_shaped):
+   꼭대기 높이 > max_height_ratio × 직경(기둥·팔), 둥근 정도 < min_circularity(가늘고 긴 것),
+   화면 가장자리에 걸린 덩어리(reject_border). 번호는 위→아래, 왼→오 (det_id 1부터).
+   가중치가 COCO 사전학습(yolo11n.pt 등)이면 yolo.classes: [47] 로 apple 만 쓴다 — 학습 없이도
+   의자·마우스·팔 같은 다른 물체가 사과 후보에서 빠진다 (2026-10-07 실측).
 
 마스크는 침식하지 않는다 (yolo.mask_erode_px 기본 0). 색 판정(역할 C)이 자체적으로 가장자리를 깎는다.
 """
@@ -40,6 +44,9 @@ _DETECT_DEFAULTS = {
     "min_area_px": 50,
     "split_min_radius_m": 0.02,
     "min_raised_fraction": 0.3,
+    "max_height_ratio": 1.3,
+    "min_circularity": 0.5,
+    "reject_border": True,
 }
 _MODEL_CACHE: dict[str, BoxModel] = {}
 
@@ -54,7 +61,8 @@ def detect(snap: SceneSnapshot, cfg: dict, *, model: BoxModel | None = None) -> 
     p = detect_params(cfg)
     ycfg = cfg.get("yolo", {})
     roi = work_roi(snap, cfg)
-    raised, f_px, z_ref = raised_mask(snap, roi, p)
+    raised, f_px, z_ref, height = raised_mask(snap, roi, p)
+    top_pct = float(cfg.get("perception", {}).get("top_percentile", 95))
 
     if model is None and ycfg.get("weights"):
         model = load_yolo(ycfg)
@@ -75,6 +83,8 @@ def detect(snap: SceneSnapshot, cfg: dict, *, model: BoxModel | None = None) -> 
         z = float(np.median(zs)) if len(zs) else z_ref
         diam = 2 * np.sqrt(area / np.pi) * z / f_px
         if not lo <= diam <= hi:
+            continue
+        if not _apple_shaped(mask, height, max(diam, _long_side_m(mask, z, f_px)), top_pct, p):
             continue
         if erode > 0:
             mask = cv2.erode(mask.astype(np.uint8), np.ones((2 * erode + 1,) * 2, np.uint8)).astype(bool)
@@ -115,8 +125,8 @@ def work_roi(snap: SceneSnapshot, cfg: dict) -> np.ndarray:
     return roi
 
 
-def raised_mask(snap: SceneSnapshot, roi: np.ndarray, p: dict) -> tuple[np.ndarray, float, float]:
-    """받침면보다 솟은 픽셀 (ROI 안). → (마스크, 초점거리 px, 받침면까지 대표 깊이 m)."""
+def raised_mask(snap: SceneSnapshot, roi: np.ndarray, p: dict) -> tuple[np.ndarray, float, float, np.ndarray]:
+    """받침면보다 솟은 픽셀 (ROI 안). → (마스크, 초점거리 px, 받침면까지 대표 깊이 m, 높이 지도 m)."""
     fx, fy, _, _ = snap.intrinsics
     f = (fx + fy) / 2
     pts = depth_points(snap.depth_m, snap.intrinsics)
@@ -133,7 +143,31 @@ def raised_mask(snap: SceneSnapshot, roi: np.ndarray, p: dict) -> tuple[np.ndarr
     if p["open_px"] > 1:
         raised = cv2.morphologyEx(raised, cv2.MORPH_OPEN, np.ones((p["open_px"],) * 2, np.uint8))
     z_ref = d / abs(n[2]) if abs(n[2]) > 1e-6 else float(np.median(snap.depth_m[valid]))
-    return raised.astype(bool) & roi, f, float(z_ref)
+    return raised.astype(bool) & roi, f, float(z_ref), h
+
+
+def _long_side_m(mask: np.ndarray, z_m: float, f_px: float) -> float:
+    """덩어리 경계상자 긴 변 (m). 트레이 ROI 경계에 잘린 사과도 긴 변은 거의 원래 직경이다."""
+    _, _, w, h = cv2.boundingRect(mask.astype(np.uint8))
+    return max(w, h) * z_m / f_px
+
+
+def _apple_shaped(mask: np.ndarray, height: np.ndarray, diam_m: float, top_pct: float, p: dict) -> bool:
+    """사과가 아닌 솟은 물체를 거른다 — 팔·상자 벽·트레이 테두리·의자 다리처럼 대회장 화면에 함께 들어오는 것들.
+
+    - 높이/직경: 받침면에 놓인 구는 꼭대기 높이 ≈ 직경. 그보다 훨씬 높으면 기둥·팔이다
+    - 둥근 정도(4πA/P²): 원 1, 붙은 사과를 반으로 가른 조각 ≈ 0.7, 가늘고 긴 물체 < 0.5
+    - 화면 가장자리에 걸린 덩어리: 잘린 물체라 크기·모양·착색을 믿을 수 없다
+    """
+    m8 = mask.astype(np.uint8)
+    if p["reject_border"] and (m8[0].any() or m8[-1].any() or m8[:, 0].any() or m8[:, -1].any()):
+        return False
+    hs = height[mask & (height != 0)]                    # 깊이 결측은 0 (height_above_plane)
+    if len(hs) and np.percentile(hs, top_pct) > p["max_height_ratio"] * diam_m:
+        return False
+    contours, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    perim = sum(cv2.arcLength(c, True) for c in contours)
+    return perim > 0 and 4 * np.pi * mask.sum() / perim ** 2 >= p["min_circularity"]
 
 
 # ================================================================ 분할
@@ -236,6 +270,8 @@ def load_yolo(ycfg: dict) -> BoxModel:
               "iou": float(ycfg.get("iou", 0.5)), "verbose": False}
         if ycfg.get("device"):
             kw["device"] = ycfg["device"]
+        if ycfg.get("classes") is not None:              # COCO 사전학습 가중치는 apple(47) 만 쓴다
+            kw["classes"] = [int(c) for c in ycfg["classes"]]
 
         def run(color_bgr: np.ndarray):
             res = net.predict(color_bgr, **kw)[0]

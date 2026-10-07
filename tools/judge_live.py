@@ -35,7 +35,7 @@ from aple.hal.shm_frames import SHM_DIR, ShmError, ShmReader, find_realsense_ser
 from aple.inspection.color import apply_gain, calibrate_card, lighting_status  # noqa: E402
 from aple.inspection.coloration import measure_view, params_from_config  # noqa: E402
 from aple.inspection.pipeline import inspect_scene  # noqa: E402
-from aple.inspection.standalone import segment_apples  # noqa: E402
+from aple.inspection.standalone import find_apples  # noqa: E402
 from aple.schema import Grade, InspectionPolicy  # noqa: E402
 from tools.color_session import GRADE_EN, overlay  # noqa: E402
 
@@ -43,12 +43,12 @@ GRADE_KO = {Grade.UPPER: "상", Grade.MIDDLE: "중", Grade.REJECT: "리젝트"}
 
 
 def judge_frame(color_raw, depth_enc, enc, calib, p, scene_id, card_calib=None,
-                policy=InspectionPolicy.NEVER):
+                policy=InspectionPolicy.NEVER, weights=None):
     """→ (오버레이 이미지, 결과 행 목록, 정렬된 스냅샷)."""
     snap = snapshot_from_piper(color_raw, depth_enc, enc, calib, scene_id, time.time())
     light = lighting_status(color_raw, card_calib) if card_calib else None
     snap.color = apply_gain(color_raw, card_calib)
-    dets = segment_apples(snap.color, snap.depth_m, snap.intrinsics, scene_id=scene_id)
+    dets = find_apples(snap.color, snap.depth_m, snap.intrinsics, scene_id=scene_id, weights=weights)
     grades = {g.apple_id: g for g in inspect_scene(snap, dets, None, p, light=light, policy=policy)}
     items, rows = [], []
     for d in dets:
@@ -82,6 +82,8 @@ def main(argv: list[str] | None = None) -> list[dict]:
     ap.add_argument("--out", type=Path, default=ROOT / "data" / "live")
     ap.add_argument("--shm-dir", type=Path, default=SHM_DIR)
     ap.add_argument("--no-window", action="store_true")
+    ap.add_argument("--weights", type=Path,
+                    help="사과 검출 가중치 (예: data/models/yolo11n.pt — COCO 면 apple 만). 없으면 깊이·모양만")
     args = ap.parse_args(argv)
 
     if not args.calib.exists():
@@ -106,6 +108,7 @@ def main(argv: list[str] | None = None) -> list[dict]:
     policy = InspectionPolicy[args.policy]
     card = None
     print(f"D435 {serial}, 깊이 창 {args.near:.0f}~{args.far:.0f} mm, 품종 {p.variety}, 정책 {policy.name}")
+    print(f"사과 검출: {args.weights or '깊이·모양만 (가중치 없음)'}")
 
     scene_id, n_saved, rows = 0, len(list(args.out.glob("snap_*.npz"))) if args.out.exists() else 0, []
     shown = False
@@ -122,7 +125,8 @@ def main(argv: list[str] | None = None) -> list[dict]:
             if card is None and args.card_roi:
                 card = calibrate_card(color_raw, tuple(int(v) for v in args.card_roi.split(",")))
                 print(f"회색 카드 잔여 보정 게인 R {card.rgb_gain[0]:.2f} G {card.rgb_gain[1]:.2f} B {card.rgb_gain[2]:.2f}")
-            image, rows, snap = judge_frame(color_raw, depth_enc, enc, calib, p, scene_id, card, policy)
+            image, rows, snap = judge_frame(color_raw, depth_enc, enc, calib, p, scene_id, card, policy,
+                                            args.weights)
 
             if args.once:
                 save(args.out, n_saved, color_raw, snap, image)

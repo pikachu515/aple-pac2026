@@ -236,3 +236,17 @@ def test_truth_uses_every_pose_as_a_top_view_sample(truth):
     assert views_csv.exists()
     out = cs.cmd_curve(views_csv, None, "fuji")                       # 자세별 표본으로 곡선
     assert out["curve"][0].n == 18
+
+
+def test_patches_command_records_reference_colors_with_card(tmp_path):
+    from aple.inspection.ref_patch import PatchCalib
+    folder = tmp_path / "patch_desk"
+    patches = [((110, 20, 60, 60), (180, 40, 40)), ((190, 20, 60, 60), (210, 190, 70)), ((270, 20, 60, 60), (200, 200, 200))]
+    color, depth, _ = render([], card_rect=CARD, patches=patches)
+    save(folder, 0, color, depth)
+    cs.cmd_card(folder, ",".join(map(str, CARD)), None)
+    rois = [f"{n}={','.join(map(str, r))}" for n, (r, _) in zip(cs.PATCH_NAMES, patches)]
+    cs.main(["patches", str(folder), *[a for r in rois for a in ("--roi", r)]])
+    calib = PatchCalib.from_dict(json.loads((folder / "patch.json").read_text(encoding="utf-8")))
+    assert set(calib.rois) == {"red", "yellow", "white", "card"}            # 카드가 4번째 패치로 들어간다
+    assert calib.ref_lin["red"][0] > calib.ref_lin["red"][2]

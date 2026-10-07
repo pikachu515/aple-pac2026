@@ -79,8 +79,12 @@ def render(apples: list[Apple], *, table_z: float = 0.65, tint=(1.0, 1.0, 1.0),
            card_rect: tuple[int, int, int, int] | None = None, depth_dropout: float = 0.0,
            highlight_on: int | None = None, color_noise: float = 0.0, depth_noise_m: float = 0.0,
            shadow_rect: tuple[int, int, int, int] | None = None, shadow_factor: float = 0.08,
-           intr=INTR, size=SIZE, seed: int = 0):
-    """→ (color BGR uint8, depth_m, [정답 마스크])"""
+           patches: list[tuple[tuple[int, int, int, int], tuple[int, int, int]]] | None = None,
+           mix: np.ndarray | None = None, intr=INTR, size=SIZE, seed: int = 0):
+    """→ (color BGR uint8, depth_m, [정답 마스크])
+
+    patches: [(x,y,w,h), sRGB(r,g,b)] 레퍼런스 색 패치. mix: 3×3 선형 RGB 혼합 (채널이 섞이는 조명 변화).
+    """
     H, W = size
     fx, fy, cx, cy = intr
     v, u = np.indices((H, W))
@@ -103,6 +107,8 @@ def render(apples: list[Apple], *, table_z: float = 0.65, tint=(1.0, 1.0, 1.0),
     if card_rect is not None:
         x, y, w, h = card_rect
         lin[y:y + h, x:x + w] = CARD
+    for (x, y, w, h), rgb in patches or []:
+        lin[y:y + h, x:x + w] = srgb_to_linear(np.asarray(rgb) / 255)
     masks = []
     for i, a in enumerate(apples):
         m = who == i
@@ -114,6 +120,8 @@ def render(apples: list[Apple], *, table_z: float = 0.65, tint=(1.0, 1.0, 1.0),
         shade = 0.45 + 0.55 * np.clip(-(n_cam * rays[m]).sum(axis=1), 0, 1)   # 밝기만 바꾸고 색상각은 유지
         lin[m] = (YELLOW + (RED - YELLOW) * col[:, None]) * shade[:, None]
     lin *= np.asarray(tint)
+    if mix is not None:
+        lin = lin @ np.asarray(mix, float).T
     if shadow_rect is not None:           # 팔 등이 드리운 그림자 (사과·테이블 모두 어두워짐)
         x, y, w, h = shadow_rect
         lin[y:y + h, x:x + w] *= shadow_factor

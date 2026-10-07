@@ -145,6 +145,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | apple_crop_extractor, color_segmentation_node, surface_area_corrector | `inspection/coloration.py` `color_ratio` | 필수 — ✅ 구현·검증 |
 | surface_map_accumulator | `inspection/coloration.py` `accumulate_views` | 확장 (모드 B) — ✅ 구현·검증 |
 | (모드 B 자세 계산) | `inspection/inhand.py` — 로봇 자세 → 카메라에서 본 사과 방향·중심, 검사 각도별 예상 커버리지 | 확장 (모드 B) — ✅ 구현·검증 |
+| (모드 B 촬영 공급자) | `inspection/in_hand_provider.py` `InHandCaptureProvider` — 스냅샷 + 로봇 자세 → `InHandCapture`. 손에 든 사과 마스크(핑거 제외), 깊이 결측 시 재촬영. `PiperStudioMotionTransport(in_hand_capture_provider=...)` 에 꽂고 검사 전 `begin(apple, apple_in_tcp)` | 확장 (모드 B) — ✅ 구현·검증 (합성) |
 | grade_classifier | `inspection/grade_classifier.py` | 필수 — ✅ 구현·검증 |
 | (M2 진입점) | `inspection/pipeline.py` `inspect_scene` — 스냅샷 1장의 사과 전부 판정, scene_id 불일치 거부 | 필수 — ✅ 구현·검증 |
 | top_view_estimator | 탑뷰–전표면 오차를 실측해 `ratio_lo/hi` 폭으로 사용 | 대회 후 (학습형 모델) |

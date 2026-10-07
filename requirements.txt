@@ -1,6 +1,6 @@
 # 대회 전 버전을 확정해 == 로 고정한다 (S14-1)
 numpy
-opencv-python
+opencv-python>=4.8,<5            # 5.0 에서 cv2.calibrateHandEye 가 빠졌다 (eye-to-hand 캘리브레이션)
 pyyaml
 pyrealsense2
 ultralytics

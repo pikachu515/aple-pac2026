@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from aple.schema import CaptureMode, FailureCode
+from aple.schema import CaptureMode, FailureCode, LightingStatus, LightState
 
 
 class RecoveryAction(str, Enum):
@@ -23,6 +23,13 @@ class RecoveryAction(str, Enum):
     SAFE_STOP_AND_ALERT = "safe_stop_and_alert"
     STOP_AND_IDLE = "stop_and_idle"
     REEVALUATE_DEFERRED = "reevaluate_deferred"
+
+
+def is_lighting_fault(status: LightingStatus) -> bool:
+    """LightingStatus -> ``decide(lighting_fault=...)`` 입력. FAULT 이거나 카드가 안 보이면 True."""
+    if not isinstance(status, LightingStatus):
+        raise TypeError("status must be LightingStatus")
+    return status.light_state == LightState.FAULT or not status.card_valid
 
 
 @dataclass(frozen=True)

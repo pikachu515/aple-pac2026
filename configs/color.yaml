@@ -3,3 +3,5 @@
 # aple/inspection/color.py 가 같은 일을 한다.
 color:
   gray_card: {target_srgb: 118, delta_e_warn: 2.5, delta_e_fault: 6.0}
+  card_json: null                 # tools/color_session.py card 결과 경로 (현장 세션 폴더의 card.json). CardMonitor 가 읽는다
+  patch_json: null                # tools/color_session.py patches 결과 (적·황·백 + 회색 카드). 없으면 패치 보정 없이 카드만

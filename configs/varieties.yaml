@@ -28,6 +28,17 @@ inspection:
   max_view_disagreement: 0.25     # [임시] 모드 B 뷰 간 편차 한계
   min_confidence: 0.5
   surface_map: {bins: 600, margin: 0.02}   # 모드 B 구면 지도 칸 수, 칸 이산화 여유
+  slip_check:                     # 모드 B: 자세로 예측한 사과 중심 vs 깊이로 본 중심 (마할라노비스). T_base_camera 있을 때만
+    sigma_lateral_m: 0.0015       # [임시] 깊이 관측의 옆 방향 오차
+    sigma_axial_m: 0.003          # [임시] 깊이 방향 오차 (D435 편향 + Piper 8bit 양자화 4mm)
+    sigma_pose_m: 0.003           # [임시] 카메라–로봇 보정 + 순기구학 + 파지 측정 오차
+    max_mahalanobis: 3.37         # 3자유도 카이제곱 99% (√11.34). 미끄러지지 않은 회전 실측으로 sigma 를 맞춘다
+  in_hand_mask:                   # 모드 B 촬영: 손에 든 사과 마스크 (핑거 제외, inspection/in_hand_provider.py)
+    search_tol_m: 0.02            # 1차: 예측 구 표면 ± 20mm 안의 깊이 점 (미끄러져도 잡힘)
+    surface_tol_m: 0.006          # [임시] 2차: 맞춘 구 표면 ± 6mm 만 사과. 핑거 두께보다 작게
+    roi_margin: 0.5               # 예측 구 투영 반지름 + 50% 범위만 본다
+    min_pixels: 200               # 이보다 적으면 같은 자세에서 다시 찍는다
+    retries: 1
   views:                          # 모드 B: 툴 수평(약 90°) 후 J6 90° x4 → 커버리지 약 0.9
     tilt_rad: 1.5708
     rotation_angles_rad: [0.0, 1.5708, 3.1416, 4.7124]

@@ -135,6 +135,8 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | piper_driver, command_gate | Piper Studio 로봇 데몬 (`hal/piper_studio.py`) | 대체 |
 | camera_top | Piper Studio rsd (`hal/piper_studio.py` `snapshot`) | 대체 |
 | camera_color_setup, color_normalizer, lighting_monitor | Piper Studio 회색 카드 보정 · 조명 감시 (Piper Studio 밖 실험용: `inspection/color.py`) | 대체 — ✅ 소프트웨어판 구현·검증 |
+| (카드 보정·조명 상태 공급자) | `inspection/card_monitor.py` `CardMonitor` — 원본 스냅샷에 카드 게인 적용(`capture`) + 같은 프레임 기준 조명 상태(`lighting_status_provider`). `color.card_json` 의 card.json 사용 | 필수 — ✅ 구현·검증 (합성) |
+| (레퍼런스 색 패치 조건부 보정, S3-5) | `inspection/ref_patch.py` — 적·황·백 + 회색 카드 기준 색으로 3×3 선형 보정. `CardMonitor` 가 조명이 틀어졌을 때만 적용 → 맞으면 CORRECTING 으로 판정 계속, 아니면 FAULT. 기준값은 `color_session patches` → `color.patch_json` | 확장 — ✅ 구현·검증 (합성) |
 | calibration_node | `hal/calibration.py` | 필수 |
 | workcell_config_server | `configs/*.yaml` | 필수 |
 | scene_capture_server | `hal/piper_studio.py` `snapshot` | 필수 |
@@ -145,6 +147,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | apple_crop_extractor, color_segmentation_node, surface_area_corrector | `inspection/coloration.py` `color_ratio` | 필수 — ✅ 구현·검증 |
 | surface_map_accumulator | `inspection/coloration.py` `accumulate_views` | 확장 (모드 B) — ✅ 구현·검증 |
 | (모드 B 자세 계산) | `inspection/inhand.py` — 로봇 자세 → 카메라에서 본 사과 방향·중심, 검사 각도별 예상 커버리지 | 확장 (모드 B) — ✅ 구현·검증 |
+| (모드 B 촬영 공급자) | `inspection/in_hand_provider.py` `InHandCaptureProvider` — 스냅샷 + 로봇 자세 → `InHandCapture`. 손에 든 사과 마스크(핑거 제외), 깊이 결측 시 재촬영. `PiperStudioMotionTransport(in_hand_capture_provider=...)` 에 꽂고 검사 전 `begin(apple, apple_in_tcp)` | 확장 (모드 B) — ✅ 구현·검증 (합성) |
 | grade_classifier | `inspection/grade_classifier.py` | 필수 — ✅ 구현·검증 |
 | (M2 진입점) | `inspection/pipeline.py` `inspect_scene` — 스냅샷 1장의 사과 전부 판정, scene_id 불일치 거부 | 필수 — ✅ 구현·검증 |
 | top_view_estimator | 탑뷰–전표면 오차를 실측해 `ratio_lo/hi` 폭으로 사용 | 대회 후 (학습형 모델) |
@@ -154,6 +157,7 @@ M2 = 색상 품질 판별(역할 C), M3 = 로봇 실행·손상 방지(역할 B�
 | motion_executor, scripted_backend, soft_landing | `execution/motion_executor.py` | 필수 |
 | act_backend | `hal/piper_studio.py` `run_policy` | 필수 (병행) |
 | inspect_skill | `execution/motion_executor.py` `inspect` | 확장 (모드 B) |
+| 미끄러짐 복구 의도 | `execution/pick_place_pipeline.py` `regrade_with_slip_decision` | 확장 (모드 B) — `InHandSlip` 만 잡아 `FailureCode.SLIP` + `RecoveryPolicy` 결정을 반환. 재파지 동작은 하지 않는다 |
 | gripper_force_controller | `execution/gripper.py` | 확장 (FSR/힘 텔레메트리 사용 시) |
 | cycle_manager | `orchestration/cycle_manager.py` | 필수 (단순형) |
 | (M4 장면 실행기) | `orchestration/scene_runner.py` `SceneRunner` — CycleManager 의 plan·execute·records 를 각 역할 모듈로 채움 (조명 FAULT 면 실행 안 함 → RECALIBRATE_LIGHT). 실행 파일 `tools/run_cycle.py` (`--replay` 드라이런 · `--live` 판정·계획 · `--execute` 는 이슈 #24 부품이 들어온 뒤) | 필수 — ✅ 구현·검증 (합성, M1 은 #13) |

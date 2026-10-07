@@ -1,5 +1,24 @@
 # 인식 (설계서 9.3 perception.yaml) — 역할 A
 perception:
   tracker: {match_radius_m: 0.03}
-  sphere_fit: {ransac_threshold_m: 0.003, max_fit_residual_m: null}
-  depth: {min_valid_ratio: 0.4}   # 미달 시 G1, 구 피팅 보완
+  sphere_fit: {ransac_threshold_m: 0.003, max_fit_residual_m: null, max_radius_disagreement: 0.25}
+  depth: {min_valid_ratio: 0.4}   # 미달 시 G1, confidence 절반
+  max_clearance_m: 0.2            # 이웃·트레이 벽 간격 상한 (주변이 비었을 때)
+  top_percentile: 95              # 마스크 내 점 base z 상위 분위 → 사과 꼭대기 높이
+  detect:                         # aple/perception/detector.py
+    min_height_m: 0.012           # 받침면보다 이만큼 솟은 픽셀만 사과 후보
+    diam_range_m: [0.03, 0.12]    # 투영 직경이 이 범위 밖이면 사과가 아니다
+    plane: {step_px: 4, iters: 300, tol_m: 0.004}
+    close_px: 9                   # 광택 깊이 구멍 메우기
+    open_px: 5                    # 잡음 점 지우기
+    min_area_px: 50
+    split_min_radius_m: 0.02      # 붙은 사과 분리 — 이보다 가까운 봉우리는 한 사과
+    min_raised_fraction: 0.3      # YOLO 상자 안 솟은 픽셀 비율 하한 (미달 = 오검출)
+  box:                            # aple/perception/box_occupancy.py
+    height_percentile: 90
+    cell_margin_m: 0.01
+    min_valid_ratio: 0.3
+    min_points: 15
+    occupied_min_height_m: 0.025  # 바닥보다 이만큼 높으면 점유 (최소 사과 반경보다 작게)
+    wall_band_m: 0.02
+    max_unknown_fraction: 0.5

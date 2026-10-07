@@ -1,0 +1,91 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Help Height: 0
+    Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Value: true
+      Reference Frame: base_link
+      Cell Size: 0.1
+      Plane Cell Count: 12
+      Color: 160; 160; 164
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Value: true
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.4
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Depth cloud
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /m1/cloud
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Color Transformer: RGB8
+      Style: Points
+      Size (Pixels): 2
+      Alpha: 1
+      Decay Time: 0
+      Position Transformer: XYZ
+    - Class: rviz_default_plugins/MarkerArray
+      Name: M1 markers
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /m1/markers
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Namespaces:
+        apples: true
+        apple_labels: true
+        truth: true
+        boxes: true
+        box_labels: true
+        walls: true
+        tray: true
+        calib: true
+        calib_labels: true
+  Enabled: true
+  Global Options:
+    Background Color: 40; 40; 44
+    Fixed Frame: base_link
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Distance: 1.1
+      Focal Point:
+        X: 0.3
+        Y: 0
+        Z: 0.03
+      Pitch: 0.75
+      Yaw: 3.5
+      Near Clip Distance: 0.01
+    Saved: ~
+Window Geometry:
+  Width: 1400
+  Height: 900
+  Displays:
+    collapsed: false

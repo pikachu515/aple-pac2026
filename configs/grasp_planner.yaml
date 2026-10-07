@@ -1,0 +1,11 @@
+# 파지 후보 (설계서 perception.grasp, aple/perception/grasp_planner.py) — 역할 A
+# 핑거 치수는 역할 D 어댑터·패드 실측으로 바꾼다. [임시] = 실측 전 초기값.
+grasp_planner:
+  yaw_step_deg: 15                # yaw 후보 간격 (0~180°)
+  open_margin_m: 0.01             # [임시] 핑거 안쪽 면 ↔ 사과 표면 여유 (사전 개방 폭 = 직경 + 2 × 이 값)
+  finger_thickness_m: 0.012       # [임시] 핑거 + 어댑터 + 패드 두께 (닫힘 방향)
+  finger_width_m: 0.02            # [임시] 핑거 폭 (닫힘 방향에 수직)
+  min_clearance_m: 0.004          # 이보다 좁으면 collision_free = false → DEFER
+  approach_height_m: 0.08         # 집기 전 자세 = 집는 자세 위 이 높이
+  tool_down_rpy_deg: [180, 0, 0]  # [임시] TCP 가 아래를 보는 자세 (base_link RPY). 역할 B IK 규약과 맞춘다
+  max_clearance_m: 0.2

@@ -120,6 +120,8 @@ apple_03,애매
 ```bash
 # ① 색 보정값 — 회색 카드 영역 드래그
 python tools/color_session.py card    data/snapshots/1006_desk
+# ①-2 (패치를 붙였다면) 적·황·백 패치 영역을 차례로 드래그 → patch.json. 조명이 틀어질 때만 쓰는 보정
+python tools/color_session.py patches data/snapshots/1006_desk
 
 # ② 착색비율·등급 — _analysis/ 의 오버레이 이미지를 꼭 눈으로 본다
 python tools/color_session.py analyze data/snapshots/1006_desk

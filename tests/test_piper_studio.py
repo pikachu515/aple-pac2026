@@ -223,6 +223,21 @@ def test_joint_state_reads_v059_raw_millidegrees(piper_web):
     assert fake.calls[1][:2] == ("POST", "/api/auth/login")
 
 
+def test_gripper_width_reads_the_raw_encoder_through_the_measured_range(piper_web):
+    fake, adapter = piper_web
+    fake.raw["gripper"] = 34000                      # 68000 = 열림 100 %
+
+    assert adapter.gripper_width_m() == pytest.approx(0.04)
+
+
+def test_gripper_width_requires_the_measured_range(piper_web):
+    _, adapter = piper_web
+    adapter.cfg["gripper_width_range_m"] = None
+
+    with pytest.raises(PiperWebError, match="gripper_width_range_m"):
+        adapter.gripper_width_m()
+
+
 def test_camera_preview_returns_the_jpeg_bytes_without_scene_claims(piper_web):
     fake, adapter = piper_web
 
@@ -314,6 +329,43 @@ def test_motion_transport_uses_single_goal_when_no_subdivision_is_needed():
     assert kind == "goal"
     assert position_rad == pytest.approx((0.1, 0.0, 0.0, 0.0, 0.0, 0.0))
     assert timeout_s == pytest.approx(1.0)
+
+
+class _CaptureProvider:
+    def __init__(self, tool_pose_fn):
+        self._tool_pose_fn = tool_pose_fn
+
+    def __call__(self, *args, **kwargs):
+        return None
+
+
+def _fk_warnings(monkeypatch, provider, fk):
+    from aple.hal import piper_studio
+
+    warnings = []
+    monkeypatch.setattr(piper_studio._LOG, "warning", lambda msg, *a, **k: warnings.append(msg))
+    PiperStudioMotionTransport(
+        FakeMotionStudio(), max_joint_step_rad=0.2,
+        tool_pose_provider=fk, in_hand_capture_provider=provider,
+    )
+    return warnings
+
+
+def test_motion_transport_warns_when_capture_and_tool_pose_use_different_fk(monkeypatch):
+    def fk_a(joints):
+        return None
+
+    def fk_b(joints):
+        return None
+
+    assert _fk_warnings(monkeypatch, _CaptureProvider(fk_a), fk_b)
+
+
+def test_motion_transport_is_quiet_when_both_share_the_same_fk(monkeypatch):
+    def fk(joints):
+        return None
+
+    assert not _fk_warnings(monkeypatch, _CaptureProvider(fk), fk)
 
 
 def test_motion_transport_uses_current_joint_state_for_gripper_commands():

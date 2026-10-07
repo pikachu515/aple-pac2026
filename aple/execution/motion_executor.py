@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Protocol
+from enum import Enum
+from typing import Callable, Protocol
 
 from aple.execution.gripper import effort_for
 from aple.execution.goal_builder import (
@@ -73,11 +74,24 @@ class PickPhaseResult:
     tool_pose_at_hover_base: Pose3D | None
 
 
+class ViewVerdict(Enum):
+    """Per-view in-hand check result, decided right after each capture."""
+
+    OK = "ok"
+    UNVERIFIED = "unverified"  # e.g. too few depth points: retake once, then treat as slip
+    SLIP = "slip"
+
+
+# (view_index, capture) -> verdict. The HAL calls it after every capture while the apple is held.
+ViewCheck = Callable[[int, InHandCapture], ViewVerdict]
+
+
 @dataclass(frozen=True)
 class InspectionPhaseResult:
     success: bool
     captured_views: int
     captures: tuple[InHandCapture, ...] = ()
+    slip_view_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +110,7 @@ class InspectionExecutionResult:
     phase_reached: Phase
     captured_views: int
     captures: tuple[InHandCapture, ...] = ()
+    slip_view_index: int | None = None
 
 
 class MotionAdapter(Protocol):
@@ -169,6 +184,7 @@ class MotionAdapter(Protocol):
         *,
         effort: int,
         timeout_s: float,
+        view_check: ViewCheck | None = None,
     ) -> InspectionPhaseResult: ...
 
     def inspect(
@@ -347,8 +363,14 @@ class MotionExecutor:
         profile: GraspProfile,
         apple_in_tcp: Pose3D,
         apple_center_in_base: tuple[float, float, float],
+        *,
+        view_check: ViewCheck | None = None,
     ) -> InspectionExecutionResult:
-        """Execute all configured in-hand views and require every capture."""
+        """Execute all configured in-hand views and require every capture.
+
+        ``view_check`` is called by the adapter right after each capture; a SLIP verdict
+        stops the remaining rotations (turning a shifted apple can drop it).
+        """
         if not profile.feasible:
             return InspectionExecutionResult(False, FailureCode.ABORTED, Phase.IDLE, 0)
         views_cfg = self.cfg["inspection"]["views"]
@@ -359,24 +381,38 @@ class MotionExecutor:
             rotation_angles_rad=views_cfg["rotation_angles_rad"],
             settle_time_s=float(views_cfg["settle_time_s"]),
         )
+        extra = {} if view_check is None else {"view_check": view_check}
         result = self.hal.inspect_views(
             profile,
             inspection_plan,
             effort=self._checked_effort(profile),
             timeout_s=self._positive_timeout("inspect_s"),
+            **extra,
         )
         expected_views = len(inspection_plan.target_tool_poses)
         if result.captured_views < 0 or result.captured_views > expected_views:
             raise ValueError("inspection backend returned an invalid captured_views count")
         if result.captures and len(result.captures) != result.captured_views:
             raise ValueError("inspection backend capture payload count is inconsistent")
-        success = result.success and result.captured_views == expected_views
+        slip_view = getattr(result, "slip_view_index", None)
+        if slip_view is not None and not 0 <= slip_view < expected_views:
+            raise ValueError("inspection backend returned an invalid slip_view_index")
+        success = (
+            result.success and slip_view is None and result.captured_views == expected_views
+        )
+        if success:
+            failure = FailureCode.NONE
+        elif slip_view is not None:
+            failure = FailureCode.SLIP
+        else:
+            failure = FailureCode.ABORTED
         return InspectionExecutionResult(
             success,
-            FailureCode.NONE if success else FailureCode.ABORTED,
+            failure,
             Phase.INSPECT,
             result.captured_views,
             result.captures,
+            slip_view,
         )
 
     def place_held_apple(
@@ -386,8 +422,14 @@ class MotionExecutor:
         apple_in_tcp: Pose3D,
         plan: PlacementPlan,
         backend: str | None = None,
+        *,
+        speed_scale: float | None = None,
     ) -> ExecResult:
-        """Transfer an inspected apple to its new grade's placement and release it."""
+        """Transfer an inspected apple to its new grade's placement and release it.
+
+        ``speed_scale`` overrides the transit speed (slip recovery runs slowly); it may
+        not exceed ``safety.speed_scale_max``. The gripper opens only at the target.
+        """
         self._validate_held_match(apple, profile, plan)
         if not profile.feasible or not plan.feasible:
             return ExecResult(False, FailureCode.ABORTED, Phase.IDLE)
@@ -401,6 +443,11 @@ class MotionExecutor:
         targets = build_place_targets(apple_in_tcp, plan)
         backend, task_text, timeout_s = self._backend_options(backend)
         effort = self._checked_effort(profile)
+        transit_speed = self._speed_scale("speed_scale_max")
+        if speed_scale is not None:
+            transit_speed = self._bounded_speed("speed_scale", speed_scale)
+            if transit_speed > self._speed_scale("speed_scale_max"):
+                raise ValueError("speed_scale must not exceed safety.speed_scale_max")
         phase_a = self.hal.execute_place_phase_a(
             apple,
             profile,
@@ -409,7 +456,7 @@ class MotionExecutor:
             backend=backend,
             effort=effort,
             task_text=task_text,
-            speed_scale=self._speed_scale("speed_scale_max"),
+            speed_scale=transit_speed,
             timeout_s=timeout_s,
         )
         if not phase_a.success:
@@ -426,6 +473,9 @@ class MotionExecutor:
         descent = float(soft["final_descent_m"])
         if not math.isfinite(descent) or descent <= 0:
             raise ValueError("execution.soft_landing.final_descent_m must be finite and positive")
+        landing_speed = self._bounded_speed("slow_speed_scale", soft["slow_speed_scale"])
+        if speed_scale is not None:
+            landing_speed = min(landing_speed, transit_speed)
         phase_b = self.hal.execute_phase_b(
             apple,
             profile,
@@ -434,21 +484,54 @@ class MotionExecutor:
             build_soft_landing_plan(
                 targets,
                 final_descent_m=descent,
-                slow_speed_scale=self._bounded_speed(
-                    "slow_speed_scale", soft["slow_speed_scale"]
-                ),
-                approach_speed_scale=self._speed_scale("speed_scale_max"),
+                slow_speed_scale=landing_speed,
+                approach_speed_scale=transit_speed,
             ),
             effort=effort,
             final_descent_m=descent,
-            slow_speed_scale=self._bounded_speed(
-                "slow_speed_scale", soft["slow_speed_scale"]
-            ),
+            slow_speed_scale=landing_speed,
             timeout_s=self._positive_timeout("phase_b_s"),
         )
         if not phase_b.success or phase_b.phase_reached != Phase.RETREAT:
             return ExecResult(False, FailureCode.ABORTED, phase_b.phase_reached)
         return ExecResult(True, FailureCode.NONE, phase_b.phase_reached)
+
+    def recovery_speed_scale(self) -> float:
+        """Low transit speed for every slip-recovery motion (execution.recovery.speed_scale)."""
+        speed = self._bounded_speed(
+            "execution.recovery.speed_scale",
+            self.cfg["execution"]["recovery"]["speed_scale"],
+        )
+        if speed > self._speed_scale("speed_scale_max"):
+            raise ValueError("execution.recovery.speed_scale must not exceed safety.speed_scale_max")
+        return speed
+
+    def gripper_width_m(self) -> float | None:
+        """Measured finger width, or None when the adapter cannot read it."""
+        reader = getattr(self.hal, "gripper_width_m", None)
+        if reader is None:
+            return None
+        width = reader()
+        if width is None:
+            return None
+        width = float(width)
+        if not math.isfinite(width) or width < 0:
+            raise ValueError("gripper width must be finite and non-negative")
+        return width
+
+    def grip_lost(self) -> bool:
+        """True when the fingers are (almost) fully closed, i.e. the apple is already gone.
+
+        Unknown width (adapter cannot read it) is reported as not lost; the caller then
+        proceeds with the slow recovery placement.
+        """
+        width = self.gripper_width_m()
+        if width is None:
+            return False
+        limit = float(self.cfg["execution"]["recovery"]["lost_grip_width_m"])
+        if not math.isfinite(limit) or limit < 0:
+            raise ValueError("execution.recovery.lost_grip_width_m must be finite and non-negative")
+        return width <= limit
 
     def inspect(
         self,

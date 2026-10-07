@@ -48,9 +48,23 @@ def test_slip_allows_exactly_one_retry(policy):
     assert policy.decide(failure_code=FailureCode.SLIP).action == (
         RecoveryAction.RETRY_GRASP_ONCE
     )
-    assert policy.decide(
-        failure_code=FailureCode.SLIP, slip_retry_count=1
-    ).action == RecoveryAction.SAFE_STOP_AND_ALERT
+    second = policy.decide(failure_code=FailureCode.SLIP, slip_retry_count=1)
+    assert second.action == RecoveryAction.PLACE_REJECT_AND_ALERT
+    assert second.alert
+
+
+def test_slip_with_lost_gripper_safe_stops_without_retry_or_reject_placement(policy):
+    for retries in (0, 1):
+        decision = policy.decide(
+            failure_code=FailureCode.SLIP, slip_retry_count=retries, gripper_lost=True
+        )
+        assert decision.action == RecoveryAction.SAFE_STOP_AND_ALERT
+        assert decision.alert
+
+
+def test_gripper_lost_must_be_bool(policy):
+    with pytest.raises(TypeError, match="gripper_lost"):
+        policy.decide(failure_code=FailureCode.SLIP, gripper_lost=1)
 
 
 def test_drop_requests_full_rescan_and_stops_when_rescan_budget_is_exhausted(policy):

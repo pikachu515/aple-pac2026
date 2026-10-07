@@ -15,6 +15,7 @@ secrets*
 data/*
 !data/README.md
 runs/
+logs/
 *.pt
 *.pth
 *.onnx

@@ -456,3 +456,26 @@ def test_pipeline_keeps_cell_reservations_until_explicit_release(cfg):
         [apple(3)], [grade(3)], [box()], [grasp_candidate(3)]
     )
     assert third_plan.items[0].placement.cell_index == first_cell
+
+
+def test_inspection_begin_hook_runs_before_views_with_apple_and_tcp_offset(cfg):
+    calls = []
+    adapter = RecordingMotionAdapter()
+    pipeline = PickPlacePipeline(
+        cfg, adapter, inspection_begin=lambda a, t: calls.append((a, t, len(adapter.calls)))
+    )
+    plan = pipeline.plan_scene([apple()], [grade(final=False)], [box()], [grasp_candidate()])
+    held = pipeline.pick_for_inspection(plan.items[0])
+    before = len(adapter.calls)
+    pipeline.inspect_held_apple(held)
+
+    assert len(calls) == 1
+    got_apple, got_tcp, n_calls = calls[0]
+    assert got_apple is held.item.apple
+    assert got_tcp is held.pick.apple_in_tcp
+    assert n_calls == before
+
+
+def test_inspection_begin_hook_must_be_callable(cfg):
+    with pytest.raises(TypeError):
+        PickPlacePipeline(cfg, RecordingMotionAdapter(), inspection_begin="x")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import logging
 import math
 import os
 import threading
@@ -24,6 +25,8 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 from aple.execution.goal_builder import Pose3D
 from aple.inspection.in_hand_capture import InHandCapture
 from aple.schema import ArmCommand, LightingStatus, SceneSnapshot
+
+_LOG = logging.getLogger(__name__)
 
 JOINT_NAMES = tuple(f"joint{index}" for index in range(1, 7))
 PIPER_WEB_FIXED_GRIPPER_EFFORT = 1000
@@ -151,6 +154,22 @@ class PiperStudio:
         self._require_enabled()
         self._ensure_authenticated(require_control=False)
         return self._read_joint_state()
+
+    def gripper_width_m(self) -> float:
+        """Measured finger width (m) from the raw gripper encoder and the measured width range."""
+        self._require_enabled()
+        self._ensure_authenticated(require_control=False)
+        normalized = self._read_raw_state()[1]
+        width_range = self.cfg.get("gripper_width_range_m")
+        if not isinstance(width_range, (list, tuple)) or len(width_range) != 2:
+            raise PiperWebError(
+                "Set piper_web.gripper_width_range_m from measured closed/open widths "
+                "before reading the gripper width"
+            )
+        closed_m, open_m = (float(value) for value in width_range)
+        if not all(math.isfinite(value) for value in (closed_m, open_m)) or closed_m < 0 or open_m <= closed_m:
+            raise ValueError("piper_web.gripper_width_range_m must be finite and increasing")
+        return closed_m + normalized / 100.0 * (open_m - closed_m)
 
     def snapshot(self, *args, **kwargs):
         if self._snapshot_provider is None:
@@ -602,6 +621,13 @@ class PiperStudioMotionTransport:
         self._studio = studio
         self._tool_pose_provider = tool_pose_provider
         self._in_hand_capture_provider = in_hand_capture_provider
+        capture_fk = getattr(in_hand_capture_provider, "_tool_pose_fn", None)
+        if capture_fk is not None and tool_pose_provider is not None and capture_fk is not tool_pose_provider:
+            # 구 중심(검사)과 TCP 자세(복구·적재)가 다른 순기구학을 쓰면 서로 어긋난다 (PR #19)
+            _LOG.warning(
+                "in_hand_capture_provider and tool_pose_provider use different forward "
+                "kinematics callables; pass the same function to both so sphere centers match"
+            )
         self._max_joint_step_rad = PiperStudio._positive_number(
             max_joint_step_rad, "max_joint_step_rad"
         )
@@ -622,6 +648,9 @@ class PiperStudioMotionTransport:
         else:
             self._studio.send_joint_trajectory(waypoints, timeout_s)
         return True
+
+    def gripper_width_m(self) -> float:
+        return self._studio.gripper_width_m()
 
     def set_gripper_width(
         self, width_m: float, effort: int, *, timeout_s: float

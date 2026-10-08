@@ -81,16 +81,17 @@ class CardDistance:
         return self.z_depth_m / self.z_true_m - 1
 
 
-def find_card(color_bgr: np.ndarray, *, max_sat: int = 32, v_highs=(150, 170, 190, 215), v_low: int = 60,
+def find_card(color_bgr: np.ndarray, *, max_sats=(32, 48, 90, 110), v_highs=(90, 110, 130, 150, 170, 190, 215), v_low: int = 40,
               min_area_px: int = 1500, aspect_range=(1.1, 1.6), roi: tuple[int, int, int, int] | None = None):
     """무채색·직사각형 덩어리 중 가장 큰 것 → (minAreaRect, 윤곽). 없으면 None.
 
-    카드 밝기는 조명·노출마다 달라 밝기 상한을 몇 가지로 바꿔 본다 (너무 높으면 흰 종이와 붙어 사각형이 아니게 된다).
+    카드 밝기·색감은 조명·노출·화이트밸런스마다 달라 채도·밝기 상한을 몇 가지로 바꿔 본다
+    (너무 느슨하면 흰 종이·바닥과 붙어 사각형이 아니게 되어 걸러진다).
     roi(x, y, w, h)를 주면 그 안에 중심이 있는 것만 본다 (color_session 의 card.json roi 를 그대로 쓸 수 있다).
     """
     hsv = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2HSV)
     best = None
-    for v_high in v_highs:
+    for max_sat, v_high in ((s, v) for s in max_sats for v in v_highs):
         m = ((hsv[..., 1] < max_sat) & (hsv[..., 2] > v_low) & (hsv[..., 2] < v_high)).astype(np.uint8)
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
         for cn in cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:

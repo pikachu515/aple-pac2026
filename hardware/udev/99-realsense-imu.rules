@@ -1,0 +1,5 @@
+# D435i IMU(HID/IIO) 접근 권한 — librealsense 공식 99-realsense-libusb.rules 의 motion module 줄
+KERNEL=="iio*", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0ad5|0afe|0aff|0b00|0b01|0b3a|0b3d|0b64|0b65|0b4b|0b5b", RUN+="/bin/sh -c 'chmod -R 0777 /sys/%p'"
+DRIVER=="hid_sensor*", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0ad5|0afe|0aff|0b00|0b01|0b3a|0b3d|0b64|0b65|0b4b|0b5b", RUN+="/bin/sh -c ' chmod -R 0777 /sys/%p && chmod 0777 /dev/%k'"
+# /dev/iio:deviceN (IMU 데이터 읽기) — 위 두 줄만으로는 root 전용으로 남았다 (10/8 확인)
+SUBSYSTEM=="iio", KERNEL=="iio:device*", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0ad5|0afe|0aff|0b00|0b01|0b3a|0b3d|0b64|0b65|0b4b|0b5b", MODE="0666"

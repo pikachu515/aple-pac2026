@@ -23,7 +23,7 @@
 | `python tools/field_values.py undo` / `history` | 마지막 변경 되돌리기 / 현장 변경 이력 (`logs/field_changes.csv`, 발표 근거) |
 | `python tools/run_cycle.py --live --save data/field/이름` | Piper 카메라로 판정·계획 (로봇 안 움직임) + 원본 장면 저장 |
 | `python tools/run_cycle.py --replay data/field/이름 --set 키=값` | 저장한 실제 장면을 값만 바꿔 다시 판정·계획 (파일은 그대로) |
-| `python tools/color_session.py card · patches · suggest · truth · curve --apply` | 색 기준 실측 → 설정에 바로 반영 (역할 C, `docs/inspection_bench.md`) |
+| `python tools/color_session.py card · suggest · truth · curve --apply` | 색 기준 실측 → 설정에 바로 반영 (역할 C, `docs/inspection_bench.md`) |
 | `python tools/judge_live.py` | Piper Studio 를 켠 채로 실시간 판정 화면 |
 | `python tools/rs_check.py --save-calib` | D435 깊이→컬러 보정값 (장치당 1회) |
 
@@ -35,18 +35,23 @@
 |---|---|---|---|---|
 | 1 | `piper_web.iface`, `piper_web.camera_id` | B | Piper Studio 화면 확인 → `field_values set` | `run_cycle --live` 가 장면을 받는다 |
 | 2 | D435 깊이→컬러 보정, `live_camera.*` | A | `rs_check --save-calib` | `judge_live` 에서 사과 마스크가 사과에 겹친다 |
-| 3 | 회색 카드 `color.card_json` (+ 패치 `color.patch_json`) | C | `color_session card` (`patches`) | 조명 ΔE ≤ 2.5 (OK) |
+| 3 | 회색 카드 `color.card_json` | C | `color_session card` | 조명 ΔE ≤ 2.5 (OK) |
 | 4 | `workcell.T_base_camera` | A | `touch_calib` (#13) | 점 터치 잔차 RMS ≤ 4 mm |
 | 5 | `workcell.tcp_offset_m`, `piper_web.gripper_width_range_m` | D | 캘리퍼스 → `field_values set` | FK(IK(T)) ≈ T, 실제 핑거 끝이 목표점에 온다 (이슈 #24) |
 | 6 | `safety.joint_limits_rad`, `safety.workspace_aabb_m` | B | Piper Studio 조그로 실측 | 실측 전에는 스크립트 실행 금지 (fail-closed) |
 | 7 | 트레이·상자 위치 `workcell.tray`, `workcell.boxes.*.origin_m` | A | `m1_live` (#13) | 상자 칸 높이가 빈 상자에서 0 근처 |
 | 8 | 사과 직경 (깊이 vs 캘리퍼스) | A·D | `run_cycle --live --save` + 캘리퍼스 | 직경 오차 ≤ 3 mm |
-| 9 | 착색 기준 `varieties.*.hue_range_deg`, `min_chroma`, `top_view_error`, `delta_up` | C | `color_session suggest · truth · curve --apply` | 육안 판정 일치율 ≥ 90% (`compare`) |
+| 9 | 착색 기준 `varieties.*.hue_range_deg`, `min_chroma`, `top_view_bias`·`top_view_error`, `delta_up` | C | `color_session suggest · truth --poses first|all · curve --apply` | 육안 판정 일치율 ≥ 90% (`compare`) |
 | 10 | 파지력 `size_bins.force.*`, `size_bins.gripper_calib` | D·B | FSR + `field_values set` | 사과 무게 + 가속에서 미끄러짐 없음, 멍 기준 아래 |
 | 11 | 모드 B `inspection.slip_check.*`, `inspection.in_hand_mask.surface_tol_m` | C | 미끄러지지 않게 잡고 검사 자세로 돌리며 `--save` → 거리 분포 | 미끄러지지 않은 회전의 99% 가 통과 |
 | 12 | `execution.placement_verify.height_tol_m` | B·A | 빈 칸 반복 촬영의 높이 흔들림 | 흔들림의 3배 |
 
-각 단계가 끝나면 `field_values list` 의 남은 개수가 줄어든다. 0 이 되어야 실기 실행(`run_cycle --execute`)을 연다.
+각 단계가 끝나면 `field_values list` 의 **필수** 값 개수가 줄어든다. 0 이 되어야 실기 실행(`run_cycle --execute`)을 연다.
+비워 두는 게 정상인 값(자동 선택·자동 계산·다른 모드에서만 필요)은 설정 주석에 `[선택]` 을 달아 필수에서 뺀다 (`list --all` 로 보기).
+
+**탑뷰 판정 구간 (9단계)**: 탑뷰 오차는 한쪽으로 쏠린다(10/7 실측: 꼭지가 위면 +4~+18 %p). `truth` 가 치우침(`top_view_bias`)과
+남는 흔들림(`top_view_error`)을 함께 제안한다. 현장 사과가 꼭지 위로 놓이면 `--poses first`, 방향이 무작위면 `--poses all`.
+**truth 를 `--apply` 하기 전 기본값(치우침 0, ±0.10)은 꼭지 위 사과를 '중→상' 으로 보낼 수 있다.**
 
 ## 현장 반복 루프 (판정·계획을 고칠 때)
 

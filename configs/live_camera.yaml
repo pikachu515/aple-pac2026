@@ -1,7 +1,7 @@
 # 실기 카메라 입력 (aple/hal/live_snapshot.py) — 역할 A
 # Piper Studio(rsd)가 공유 메모리로 내보내는 D435 컬러·깊이를 읽는다. 카메라 장치를 직접 열지 않는다.
 live_camera:
-  serial: null                    # null = 공유 메모리에서 첫 RealSense 자동 선택
+  serial: null                    # [선택] null = 공유 메모리에서 첫 RealSense 자동 선택
   depth_calib: configs/calib/d435.json   # 깊이→컬러 외부 파라미터 (tools/rs_check.py --save-calib)
   near_mm: 150                    # Piper Studio 깊이 인코딩 창 — 카메라 설정 화면 값과 같게 (권장 400/900)
   far_mm: 1200

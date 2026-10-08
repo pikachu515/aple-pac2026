@@ -97,23 +97,31 @@ def in_hand_mask(depth_m: np.ndarray, intrinsics: tuple[float, float, float, flo
 
     t_meas = depth_m[vs, us] / rays[:, 2]                                             # 시선 방향 측정 거리
 
-    def along_ray_ok(center: np.ndarray, tol: float) -> np.ndarray:
-        # 같은 시선 위에서 구 앞면까지의 거리와 측정 거리를 비교한다. 중심까지 거리로 비교하면
+    def behind(center: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        # 같은 시선 위에서 측정 거리 − 구 앞면까지 거리 (+ = 구 표면보다 뒤, − = 앞). 중심까지 거리로 비교하면
         # 실루엣 가장자리(시선이 구를 스침)에서 앞을 가린 핑거와 표면이 구분되지 않는다
         t_sphere, hits = ray_sphere(rays, Sphere(center, radius_m))
-        return hits & (np.abs(t_meas - t_sphere) <= tol)
+        return t_meas - t_sphere, hits
 
     near = np.abs(np.linalg.norm(pts - c, axis=1) - radius_m) <= p.search_tol_m      # 1차
     if near.sum() < 10:
         return mask
     center, _, _ = fit_center_fixed_radius(pts[near], radius_m, c)
-    for tol in (2 * p.surface_tol_m, p.surface_tol_m, p.surface_tol_m):              # 핑거에 끌린 중심을 다듬는다
-        inliers = near & along_ray_ok(center, tol)
+    # 핑거·링은 항상 사과보다 카메라 쪽(앞)에 있다. 링처럼 넓게 가리면 맞춤이 앞으로 끌리므로, 깊이 차이
+    # 분포의 뒤쪽 무리(70% 지점)를 사과 표면으로 보고 그 주변 점으로 다시 맞춘다 (가림이 절반 미만이면 성립)
+    for _ in range(3):
+        res, hits = behind(center)
+        cand = near & hits
+        if cand.sum() < 10:
+            break
+        level = float(np.percentile(res[cand], 70))
+        inliers = cand & (np.abs(res - level) <= p.surface_tol_m)
         if inliers.sum() < 10:
             break
         center, _, _ = fit_center_fixed_radius(pts[inliers], radius_m, center)
 
-    on_surface = along_ray_ok(center, p.surface_tol_m)                                 # 2차
+    res, hits = behind(center)                                                         # 2차
+    on_surface = hits & (res >= -0.5 * p.surface_tol_m) & (res <= p.surface_tol_m)     # 앞쪽은 절반만 허용
     mask[vs[on_surface], us[on_surface]] = True
     return mask
 

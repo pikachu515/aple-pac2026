@@ -206,7 +206,7 @@ def cmd_analyze(folder: Path, card: str | None, variety: str | None) -> None:
     rows = analyze_folder(folder, find_card(folder, card), p)
     print()
     print(f"품종 {p.variety}, 상자 기준 '{p.box_boundary}' 이상 {p.coloring_threshold:.0%}, 착색 색상각 {p.hue_range_deg}, "
-          f"판정 구간 ±{p.top_view_error:.2f}")
+          f"판정 구간 = 탑뷰 {-p.top_view_bias * 100:+.0f}%p ± {p.top_view_error * 100:.0f}%p")
     print(f"{'파일':<16}{'번호':>4}{'직경mm':>8}{'착색':>7}{'규격':>5}{'판정':>7}  사유")
     for r in rows:
         shade = f" (그림자 {r['shadow_pct']:.0f}%)" if r["reason"] == "OCCLUDED" else ""
@@ -303,13 +303,30 @@ def truth_root(root: Path, calib: CardCalib | None, p: InspectParams) -> tuple[l
     diffs = np.abs([r["diff"] for r in view_rows])
     p90 = float(np.percentile(diffs, 90))
     summary = {"apples": len(rows), "samples": len(view_rows), "mae": float(diffs.mean()), "p90": p90,
-               "suggested_top_view_error": max(0.03, math.ceil(p90 * 100) / 100), "views": view_rows}
+               "views": view_rows,
+               "all": _bias_and_error([r["diff"] for r in view_rows]),               # 모든 자세 (방향이 무작위일 때)
+               "first": _bias_and_error([r["diff"] for r in view_rows if r["view"] == 0])}   # 평소 자세만 (꼭지가 위)
+    summary["suggested_top_view_bias"], summary["suggested_top_view_error"] = summary["all"]
     return rows, summary
 
 
-def cmd_truth(root: Path, card: str | None, variety: str | None, apply_to: Path | None = None) -> dict:
+def _bias_and_error(signed: list[float]) -> tuple[float, float]:
+    """탑뷰 − 전표면 차이들 → (치우침 = 중앙값, 구간 반폭 = 치우침을 뺀 차이의 90% 지점).
+
+    치우침을 빼지 않고 |차이| 로 대칭 구간을 잡으면, 한쪽으로 쏠린 오차를 덮느라 구간이 두 배 가까이 넓어진다.
+    """
+    d = np.asarray(signed, dtype=float)
+    bias = float(np.median(d))
+    resid = float(np.percentile(np.abs(d - bias), 90))
+    return round(bias, 2), max(0.03, math.ceil(resid * 100) / 100)
+
+
+def cmd_truth(root: Path, card: str | None, variety: str | None, apply_to: Path | None = None,
+              poses: str = "all") -> dict:
+    """poses: all = 모든 자세 표본 (사과 방향이 무작위일 때), first = 평소 자세(꼭지가 위)만 (현장에서 그렇게 놓일 때)."""
     p = params(variety)
     rows, s = truth_root(root, find_card(root, card), p)
+    bias, err = s[poses]
     write_csv(analysis_dir(root) / "truth.csv", rows)
     write_csv(analysis_dir(root) / "truth_views.csv", s["views"])     # 자세별 표본 - curve 에도 그대로 쓸 수 있다
     print(f"{'사과':<12}{'뷰':>3}{'탑뷰':>8}{'전표면':>8}{'차이':>8}")
@@ -317,10 +334,16 @@ def cmd_truth(root: Path, card: str | None, variety: str | None, apply_to: Path 
         print(f"{r['apple']:<12}{r['views']:>3}{r['top_ratio'] * 100:>7.0f}%{r['full_ratio'] * 100:>7.0f}%{r['diff'] * 100:>+7.0f}%p")
     print(f"\n사과 {s['apples']}개 x 자세 = 표본 {s['samples']}개 - 탑뷰 오차 평균 {s['mae'] * 100:.1f}%p, "
           f"90% 지점 {s['p90'] * 100:.1f}%p")
-    print(f"제안: configs/varieties.yaml 의 top_view_error: {s['suggested_top_view_error']:.2f}  (현재 {p.top_view_error:.2f})")
+    for name, label in (("all", "모든 자세"), ("first", "평소 자세(꼭지 위)만")):
+        b, e = s[name]
+        print(f"  {label:<14} 치우침 {b * 100:+.0f}%p, 남는 흔들림 ±{e * 100:.0f}%p  → 판정 구간 = 탑뷰 {-b * 100:+.0f}%p ± {e * 100:.0f}%p")
+    print(f"제안 ({'모든 자세' if poses == 'all' else '평소 자세'} 기준): top_view_bias: {bias:.2f}, top_view_error: {err:.2f}  "
+          f"(현재 {p.top_view_bias:.2f}, {p.top_view_error:.2f})")
+    print("  ※ 현장에서 사과가 놓이는 방향에 맞춰 고른다 — 꼭지가 위로 놓이면 --poses first")
     print(f"CSV: {analysis_dir(root) / 'truth.csv'} (사과별), truth_views.csv (자세별 - curve 에 넣으면 표본이 늘어난다)")
     if apply_to is not None:
-        print("  적용:", set_config_value(apply_to, "inspection.top_view_error", s["suggested_top_view_error"]).strip())
+        print("  적용:", set_config_value(apply_to, "inspection.top_view_bias", bias).strip())
+        print("  적용:", set_config_value(apply_to, "inspection.top_view_error", err).strip())
     return s
 
 
@@ -357,9 +380,10 @@ def cmd_compare(truth_csv: Path, labels_csv: Path, variety: str | None) -> dict:
 
 
 def _cr(ratio: float, p: InspectParams):
+    from aple.inspection.coloration import top_view_interval
     from aple.schema import ColorRatio, InspectMode
-    return ColorRatio(0, 0, InspectMode.TOP_SINGLE, ratio, max(0.0, ratio - p.top_view_error),
-                      min(1.0, ratio + p.top_view_error), 0.25, 0.0, 1, p.variety)
+    est, lo, hi = top_view_interval(ratio, p)
+    return ColorRatio(0, 0, InspectMode.TOP_SINGLE, est, lo, hi, 0.25, 0.0, 1, p.variety)
 
 
 # ---------------------------------------------------------------- 6. curve
@@ -478,6 +502,9 @@ def main(argv: list[str] | None = None) -> None:
         b.add_argument("--weights", type=Path, help="사과 검출 가중치 (예: data/models/yolo11n.pt). 없으면 깊이·모양만")
         if name in ("suggest", "truth"):
             b.add_argument("--apply", action="store_true", help="제안값을 configs/varieties.yaml 에 바로 써 넣는다")
+        if name == "truth":
+            b.add_argument("--poses", choices=["all", "first"], default="all",
+                           help="all: 모든 자세 표본 (방향 무작위), first: 평소 자세(꼭지 위)만 (현장에서 그렇게 놓일 때)")
     c = sub.add_parser("compare")
     c.add_argument("truth_csv", type=Path)
     c.add_argument("--labels", type=Path, required=True)
@@ -505,7 +532,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "repeat":
         cmd_repeat(args.folder, args.card, args.variety)
     elif args.cmd == "truth":
-        cmd_truth(args.folder, args.card, args.variety, VARIETIES if args.apply else None)
+        cmd_truth(args.folder, args.card, args.variety, VARIETIES if args.apply else None, args.poses)
     elif args.cmd == "compare":
         cmd_compare(args.truth_csv, args.labels, args.variety)
     else:

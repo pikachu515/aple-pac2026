@@ -27,6 +27,21 @@
 | `python tools/judge_live.py` | Piper Studio 를 켠 채로 실시간 판정 화면 |
 | `python tools/rs_check.py --save-calib` | D435 깊이→컬러 보정값 (장치당 1회) |
 
+## 대회 전에 미리 준비할 수 있는 값 (사전값)
+
+필수 값 대부분은 현장 배치·조명을 봐야 정해진다. 아래만 로봇 사양·설계 파일로 **미리 알 수 있다** — 값을 미리 넣지는 않고,
+담당자가 출처를 챙겨 와서 현장 1~5단계에서 `field_values set` 으로 바로 넣고 실물로 확인한다.
+
+| 값 | 담당 | 출처 | 현장 확인 |
+|---|---|---|---|
+| `safety.joint_limits_rad` | B | PiPER 공식 URDF (Piper Studio `piper_robot/kinematics.py` `joint_limits`): J1 ±2.618, J2 0~3.142, J3 −2.967~0, J4 ±1.745, J5 ±1.222, J6 ±2.094 rad. 안쪽으로 여유를 둔다 | Piper 조그로 양 끝 접근 |
+| `gripper_attachment.*` 7개, `workcell.tcp_offset_m`, `grasp_planner.finger_thickness_m`·`finger_width_m` | D (A) | 링형 핑거 Fusion 설계 파일 — 플랜지→링 중심 거리, 핑거 두께·폭, 접촉면 간격 | 장착 후 캘리퍼스 |
+| `piper_web.camera_id` | B | D435i 시리얼 243122071248 (Piper 표기 예: `rs_243122071248_color`) | Piper 카메라 화면의 이름과 대조 |
+| `piper_web.gripper_width_range_m` | B·D | PiPER 그리퍼 사양 0~70 mm | 링 장착 후 닫힘·열림 폭 실측 |
+
+현장에서만 정해지는 값: 카메라–로봇 캘리브레이션, 트레이·상자 위치, home/scan 자세, 작업 공간 범위, `piper_web.iface`(로봇 등록 이름),
+색 기준(조명), 검출·복구 기준. 이 값들은 아래 순서대로 정한다.
+
 ## 1일차 현장 보정 순서 (14:30 ~)
 
 앞 단계가 뒤 단계의 전제다. 표의 "통과 기준"을 넘기 전에는 다음 단계로 가지 않는다.
@@ -69,5 +84,5 @@ python tools/field_values.py undo                                              #
 ## 기록과 공유
 
 - `logs/field_changes.csv` 는 git 에 올라가지 않는다 (`logs/` 제외). 현장 실측 이력은 발표 자료(기술적 근거 15점)로 쓰므로 마감 전에 공유 드라이브에 복사한다
-- 설정 파일 변경은 바로 커밋한다 (예: `현장 실측: varieties.fuji.min_chroma 18`). 한 커밋에 한 값이 원칙 — 되돌리기 쉽다
+- 설정 파일 변경은 **대회 중에도 브랜치 → PR → CI 초록 → 머지**로 올린다 (10/8 결정). 여러 값을 한 PR에 모아도 되지만, 커밋은 한 값씩(예: `현장 실측: varieties.fuji.min_chroma 18`) — 되돌리기 쉽다. 급하면 `field_values` 로 먼저 바꿔 시험하고 PR 은 직후에 올린다
 - 시뮬레이션·합성 결과로 정한 값은 모두 `[임시]` 또는 `null` 로 남겨 두었다. 현장에서 하나씩 `[실측]` 으로 바뀌는 것이 정상이다

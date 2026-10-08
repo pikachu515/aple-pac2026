@@ -146,7 +146,8 @@ def cmd_grab(args) -> None:
 
 
 def cmd_mark(args) -> None:
-    snap = load_snapshot(args.snapshot)
+    from aple.hal.depth_correction import DepthCorrection
+    snap = DepthCorrection.from_cfg(load_config()).snapshot(load_snapshot(args.snapshot))   # 저장 파일은 보정 전 깊이
     session = load_session(args.session)
     if session["snapshot"] not in (None, str(args.snapshot)) and session["points"]:
         raise SystemExit(f"이 세션은 다른 스냅샷({session['snapshot']})으로 시작했다 — 새 --session 을 쓴다")

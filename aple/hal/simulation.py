@@ -117,7 +117,11 @@ class KinematicWorld:
                           if np.linalg.norm(np.asarray(a['center_m']) - tcp.position_m) <= self.tolerance
                           and abs(2 * a['radius_m'] - width_m) <= self.tolerance]
             size_matches = any(abs(2*a['radius_m'] - width_m) <= self.tolerance for a in self.apples)
-            if not candidates and not size_matches:
+            # 핑거가 닿는 거리에 사과가 없으면(접근 전 미리 벌리기) 무엇도 잡을 수 없다. 사전 개방 폭(직경 + 여유)이
+            # 멀리 있는 다른 사과 직경과 비슷하면 잡기 시도로 오인해 실패하던 문제 (실물 장면 시뮬에서 확인).
+            in_reach = any(np.linalg.norm(np.asarray(a['center_m']) - tcp.position_m) <= a['radius_m'] + 2 * self.tolerance
+                           for a in self.apples)
+            if not candidates and (not size_matches or not in_reach):
                 # Repositioning empty fingers to a pre-open width is a valid
                 # command, even if narrower than the maximum opening.
                 self.width = width_m
@@ -172,6 +176,108 @@ class KinematicWorld:
                              depth.astype(np.float32), tuple(self.settings['intrinsics']), self.elapsed_s)
 
 
+def virtual_camera_from_table(snap, tray_center_xy, *, step_px=4, iters=300, tol_m=0.004, center_frac=0.4):
+    """실물 깊이의 테이블 평면 → 가상 셀의 T_base_camera (카메라–로봇 보정의 대용, 실측값 아님).
+
+    base z 는 테이블 법선(카메라 쪽), base x 는 카메라 x 축을 테이블에 투영한 방향이다.
+    광축이 테이블과 만나는 점을 가상 트레이 중심에 둔다 — 카메라 높이·기울기는 실물 그대로다.
+    평면은 영상 가운데 center_frac 만 쓴다 — 10/7 D435 는 깊이가 화면 가장자리로 갈수록 휘어
+    (재보정 전 카메라) 전체로 맞추면 평면이 크게 기운다.
+    """
+    from aple.perception.geometry import depth_points, fit_plane_ransac
+    valid = snap.depth_m > 0
+    H, W = valid.shape
+    mh, mw = int(H * (1 - center_frac) / 2), int(W * (1 - center_frac) / 2)
+    center = np.zeros_like(valid)
+    center[mh:H - mh, mw:W - mw] = True
+    valid &= center
+    pts = depth_points(snap.depth_m, snap.intrinsics)[::step_px, ::step_px][valid[::step_px, ::step_px]]
+    if len(pts) < 100:
+        raise ValueError('not enough valid depth to find the table plane')
+    n, d = fit_plane_ransac(pts, iters=iters, tol_m=tol_m, seed=snap.scene_id)
+    if abs(n[2]) < 0.5:
+        raise ValueError('camera must look down at the table (tilt above 60 degrees)')
+    bz = np.asarray(n, dtype=float)
+    bx = np.array([1.0, 0.0, 0.0]) - bz[0] * bz
+    bx /= np.linalg.norm(bx)
+    by = np.cross(bz, bx)
+    R_bc = np.stack([bx, by, bz])                  # 행 = base 축(카메라 좌표) → 카메라→base 회전
+    axis_hit = np.array([0.0, 0.0, -d / n[2]])     # 광축과 테이블의 교점 (카메라 좌표)
+    T = np.eye(4)
+    T[:3, :3] = R_bc
+    T[:3, 3] = -R_bc @ axis_hit + np.array([tray_center_xy[0], tray_center_xy[1], 0.0])
+    return validate_T(T)
+
+
+class SnapshotWorld(KinematicWorld):
+    """실물 RGB-D 장면 한 장을 카메라로 쓰는 가상 셀. 사과는 그 장면의 M1 인식 결과로 놓는다.
+
+    판정·계획은 진짜 사진으로 하고, 집기·놓기는 Piper IK·구간 검사·이상적 파지로만 확인한다.
+    사과를 집어도 사진은 바뀌지 않으므로 한 장면(1 사이클)만 지원한다.
+    """
+
+    def __init__(self, cfg, fk, validator, snapshot):
+        super().__init__(cfg, fk, validator)
+        self.snapshot = snapshot
+
+    def virtual_boxes(self, snap):
+        """사진에는 상자가 없으므로(그 자리는 바닥·의자다) 설정의 상자를 빈 가상 상자로 돌려준다."""
+        from aple.schema import BoxOccupancy, Grade
+        out = []
+        for name, box in self.cfg['workcell']['boxes'].items():
+            rows, cols = box['grid']
+            z0 = float(box['origin_m'][2])
+            out.append(BoxOccupancy(snap.scene_id, Grade[name], rows, cols, float(box['cell_pitch_m']),
+                                    float(box['wall_height_m']), float(box['wall_height_m']),
+                                    tuple(float(v) for v in box['origin_m']), [z0] * (rows * cols),
+                                    [False] * (rows * cols), True))
+        return out
+
+    def capture(self):
+        if self.scene_id >= 1:
+            raise RuntimeError('real-scene simulation supports one scene (the photo does not change after picking)')
+        self.scene_id += 1
+        s = self.snapshot
+        return SceneSnapshot(self.scene_id, s.source, s.capture_mode, s.color.copy(), s.depth_m.copy(),
+                             s.intrinsics, self.elapsed_s)
+
+
+def seed_from_snapshot(cfg, snapshot):
+    """실물 장면으로 가상 셀을 맞춘다 (cfg 를 고친다): T_base_camera ← 테이블 평면, 사과 ← M1 인식."""
+    from aple.perception import detector, pose_estimator
+    tray = cfg['workcell']['tray']['center_m']
+    T = virtual_camera_from_table(snapshot, tray[:2])
+    cfg['workcell']['T_base_camera'] = T.tolist()
+    first = SceneSnapshot(1, snapshot.source, snapshot.capture_mode, snapshot.color, snapshot.depth_m,
+                          snapshot.intrinsics, 0.0)
+    # 첫 탐색은 A4 종이 + 둘레 사과가 들어가는 넓이로 (합성 셀의 작은 트레이로는 가장자리 사과가 빠진다)
+    size = cfg['workcell']['tray']['size_m']
+    cfg['workcell']['tray']['size_m'] = [max(float(size[0]), 0.32), max(float(size[1]), 0.40)]
+    states = pose_estimator.estimate(first, detector.detect(first, cfg), T, None, cfg)
+    if not states:
+        raise ValueError('no apples found in the real scene inside the virtual tray')
+    _fit_tray_to_apples(cfg, states)
+    states = pose_estimator.estimate(first, detector.detect(first, cfg), T, None, cfg)
+    cfg['simulation']['apples'] = [dict(center_m=[float(v) for v in s.center_m], radius_m=s.diameter_m / 2,
+                                        red_fraction=0.0) for s in states]
+    return T, states
+
+
+def _fit_tray_to_apples(cfg, states):
+    """가상 트레이를 실물 사과 배치에 맞춘다. 실물(종이 위)에는 벽이 없는데, 합성 셀의 작은 트레이를 그대로 쓰면
+    핑거가 가상 벽에 걸려 모든 사과가 DEFER 된다. 사과 범위 + 핑거 도달 거리 + 최소 간격만큼 키운다."""
+    from aple.perception.grasp_planner import grasp_params
+    p = grasp_params(cfg)
+    finger = (p['open_margin_m'] + p['finger_thickness_m'] / 2
+              + math.hypot(p['finger_thickness_m'] / 2, p['finger_width_m'] / 2) + p['min_clearance_m'] + 0.005)
+    xy = np.array([s.center_m[:2] for s in states])
+    r = max(s.diameter_m / 2 for s in states)
+    lo, hi = xy.min(axis=0) - r - finger, xy.max(axis=0) + r + finger
+    tray = cfg['workcell']['tray']
+    tray['center_m'] = [float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2), float(tray['center_m'][2])]
+    tray['size_m'] = [float(hi[0] - lo[0]), float(hi[1] - lo[1])]
+
+
 def check_piper_roundtrip(ik, fk, cfg):
     """Perturb seed for genuine numerical IK work; reject position/rotation drift."""
     seed = np.asarray(cfg['simulation']['initial_joint_rad'], dtype=float)
@@ -195,14 +301,17 @@ def check_piper_roundtrip(ik, fk, cfg):
     return checks
 
 
-def build_simulation(cfg, *, kinematics_module=None):
+def build_simulation(cfg, *, kinematics_module=None, snapshot=None):
+    """snapshot 을 주면 실물 장면 모드 — cfg 의 T_base_camera·사과를 그 장면에 맞춘다 (seed_from_snapshot)."""
     if cfg['execution']['default_backend'] != 'scripted' or cfg['inspection']['policy'] != 'NEVER':
         raise ValueError('kinematic simulation supports scripted mode A only')
+    if snapshot is not None:
+        seed_from_snapshot(cfg, snapshot)
     from aple.execution.trajectory import build_piper_kinematics
     from aple.execution.segment_validator import build_piper_segment_validator
     from aple.hal.piper_motion import PiperTrajectoryMotionAdapter
     ik, fk = build_piper_kinematics(cfg, kinematics_module=kinematics_module)
     validator = build_piper_segment_validator(cfg, fk, kinematics_module=kinematics_module)
     checks = check_piper_roundtrip(ik, fk, cfg)
-    world = KinematicWorld(cfg, fk, validator)
+    world = KinematicWorld(cfg, fk, validator) if snapshot is None else SnapshotWorld(cfg, fk, validator, snapshot)
     return world, PiperTrajectoryMotionAdapter(world, cfg, ik, validator), checks

@@ -23,6 +23,7 @@ import math
 import numpy as np
 
 from aple.hal.calibration import camera_to_base, validate_T
+from aple.hal.depth_correction import DepthCorrection
 from aple.perception.geometry import depth_points, project_polygon_mask, rect_base
 from aple.schema import BoxOccupancy, Grade, SceneSnapshot, Source
 
@@ -44,6 +45,7 @@ def box_params(cfg: dict) -> dict:
 def estimate(snap: SceneSnapshot, T_base_camera: np.ndarray, cfg: dict) -> list[BoxOccupancy]:
     if snap.source != Source.TOP:
         return []                                       # 인핸드 스냅샷은 상자를 보지 않는다
+    snap = DepthCorrection.from_cfg(cfg).snapshot(snap)
     T = validate_T(T_base_camera)
     p = box_params(cfg)
     valid = snap.depth_m > 0

@@ -19,6 +19,19 @@ PYTHONPATH=/path/to/wego-piper-web/robot python3 tools/run_cycle.py \
 `--set 키=값`은 덮어쓴 뒤 적용한다. 실기 `--live --execute`는 검증된 실기 연결 전까지 거부한다.
 `--simulate --execute`는 허용하지 않으며 가상 전송은 HTTP·카메라·CAN을 열지 않는다.
 
+## 실물 사진으로 시뮬레이션 (`--scene`)
+
+```bash
+PYTHONPATH=/path/to/robot python3 tools/run_cycle.py --simulate --scene data/snapshots/1007_home2 \
+  --set yolo.weights=data/models/yolo11n.pt --set "yolo.classes=[47]"
+```
+
+실물 RGB-D 한 장을 카메라 영상으로 쓴다. 판정·계획은 진짜 사진으로 하고, 집기·놓기는 Piper IK·구간 검사·이상적 파지로만 확인한다.
+가상 카메라 위치는 사진 가운데 테이블 평면으로 정하며(캘리브레이션 아님), 사과는 그 사진의 M1 결과로 가상 셀에 놓는다.
+시뮬 설정은 합성 깊이용으로 깊이 보정을 끄므로, 사진에는 `live_camera.depth_correction` 을 따로 적용한다 —
+`--scene-depth 1,0` 이면 보정 없이, `--scene-depth 1.0379,1.0524` 이면 10/7 D435i 보정값으로.
+가상 상자는 칸이 1개씩이라 같은 등급 두 번째 사과부터는 칸이 없어 ABORTED 가 된다 (실물 장면 시뮬의 한계).
+
 ## 실행 범위와 출력
 
 합성 RGB-D → 실제 M1 검출·구 피팅·상자 점유·파지 후보 → 실제 M2 판정 → M5 계획 →

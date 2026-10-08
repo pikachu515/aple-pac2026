@@ -26,6 +26,7 @@
 | `python tools/color_session.py card · suggest · truth · curve --apply` | 색 기준 실측 → 설정에 바로 반영 (역할 C, `docs/inspection_bench.md`) |
 | `python tools/judge_live.py` | Piper Studio 를 켠 채로 실시간 판정 화면 |
 | `python tools/rs_check.py --save-calib` | D435 깊이→컬러 보정값 (장치당 1회) |
+| `python tools/depth_check.py --live` · `fit` | 회색 카드 크기로 깊이 거리 확인·보정 (#29 직경 문제의 원인, 아래 2-1단계) |
 
 ## 대회 전에 미리 준비할 수 있는 값 (사전값)
 
@@ -50,6 +51,7 @@
 |---|---|---|---|---|
 | 1 | `piper_web.iface`, `piper_web.camera_id` | B | Piper Studio 화면 확인 → `field_values set` | `run_cycle --live` 가 장면을 받는다 |
 | 2 | D435 깊이→컬러 보정, `live_camera.*` | A | `rs_check --save-calib` | `judge_live` 에서 사과 마스크가 사과에 겹친다 |
+| 2-1 | 깊이 거리 `live_camera.depth_correction`, 카드 크기 `live_camera.depth_check.card_mm` | A | 자로 카드 실측 → `depth_check --live` (필요하면 `fit`) | 카드 거리 오차 ≤ 2% |
 | 3 | 회색 카드 `color.card_json` | C | `color_session card` | 조명 ΔE ≤ 2.5 (OK) |
 | 4 | `workcell.T_base_camera` | A | `touch_calib` (#13) | 점 터치 잔차 RMS ≤ 4 mm |
 | 5 | `workcell.tcp_offset_m`, `piper_web.gripper_width_range_m` | D | 캘리퍼스 → `field_values set` | FK(IK(T)) ≈ T, 실제 핑거 끝이 목표점에 온다 (이슈 #24) |
@@ -63,6 +65,14 @@
 
 각 단계가 끝나면 `field_values list` 의 **필수** 값 개수가 줄어든다. 0 이 되어야 실기 실행(`run_cycle --execute`)을 연다.
 비워 두는 게 정상인 값(자동 선택·자동 계산·다른 모드에서만 필요)은 설정 주석에 `[선택]` 을 달아 필수에서 뺀다 (`list --all` 로 보기).
+
+**깊이 거리 (2-1단계, #29)**: 10/7 실물 D435i 는 실제 0.30 / 0.43 / 0.74 m 에서 깊이가 26 / 33 / 45% 짧았다
+(회색 카드 130×100 mm 기준). 그래서 약 85 mm 사과가 45~50 mm 로 나오고, 사과 중심이 테이블 아래로 들어가 파지가 바닥에 부딪혔다.
+0.65 m 설치면 약 42% 짧을 것으로 본다 (0.65 m → 0.38 m).
+카드(눕혀서 트레이 높이)를 찍어 `depth_check --live` 가 2% 를 넘으면, ① 먼저 Piper Studio 를 멈추고(`systemctl --user stop piper-rsd`)
+RealSense 재보정(On-Chip 보정 + Tare)을 하고 다시 확인한다. ② 재보정을 못 하면 카드를 트레이 높이와 상자 하나 위(두 높이)에서
+`--live --save data/depth_check/이름` 으로 찍고 `depth_check fit data/depth_check/*` 가 알려 주는 `field_values set` 두 줄을 넣는다.
+이 단계를 `touch_calib`(4단계) 전에 끝낸다 — 깊이가 틀리면 카메라–로봇 변환도 틀린다. 재보정했다면 넣어 둔 보정값을 1, 0 으로 되돌린다.
 
 **탑뷰 판정 구간 (9단계)**: 탑뷰 오차는 한쪽으로 쏠린다(10/7 실측: 꼭지가 위면 +4~+18 %p). `truth` 가 치우침(`top_view_bias`)과
 남는 흔들림(`top_view_error`)을 함께 제안한다. 현장 사과가 꼭지 위로 놓이면 `--poses first`, 방향이 무작위면 `--poses all`.

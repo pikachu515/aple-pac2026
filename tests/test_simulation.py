@@ -42,6 +42,16 @@ def test_empty_finger_preopening_is_allowed_but_missed_apple_close_fails():
     assert world.held is None
 
 
+def test_preopening_far_from_apples_is_not_a_grasp_even_if_width_matches_a_size():
+    """실물 장면 시뮬: 사전 개방 폭(직경 + 5 mm)이 멀리 있는 다른 사과 직경과 비슷해도 잡기 시도가 아니다."""
+    pytest.importorskip('piper_robot.kinematics')
+    cfg = simulation_config(load_config(), OVERLAY)
+    cfg['simulation']['apples'] = [{'center_m': [0.30, 0.15, 0.03], 'radius_m': 0.03, 'red_fraction': 0.5}]
+    world, _, _ = build_simulation(cfg)
+    assert world.set_gripper_width(.065, 1000, timeout_s=1)        # 2r = .060 → 크기는 맞지만 핑거 근처에 없다
+    assert world.held is None and world.width == .065
+
+
 def test_actual_piper_roundtrip_with_zero_and_nonzero_offset():
     module = pytest.importorskip('piper_robot.kinematics')
     cfg = simulation_config(load_config(), OVERLAY)

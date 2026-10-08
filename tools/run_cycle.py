@@ -3,6 +3,7 @@
     python tools/run_cycle.py --replay data/snapshots/1006_desk     # 저장한 스냅샷으로 드라이런 (로봇 안 움직임)
     python tools/run_cycle.py --live --cycles 3                      # Piper 카메라로 판정·계획까지 (로봇 안 움직임)
     PYTHONPATH=/path/to/wego-piper-web/robot python tools/run_cycle.py --simulate --trace logs/simulation/trace.json
+    PYTHONPATH=... python tools/run_cycle.py --simulate --scene data/snapshots/1007_home2   # 실물 사진 판정 → 가상 집기·놓기
     python tools/run_cycle.py --live --execute --cycles 1            # 실제 로봇 실행 (빠진 부품이 있으면 거부)
 
 현장에서 바로 고치기 (시뮬레이션 결과는 참고만 — 실제 장면으로 확인한다)
@@ -37,6 +38,7 @@ import numpy as np  # noqa: E402
 import yaml  # noqa: E402
 
 from aple.config import load_config  # noqa: E402
+from aple.hal.depth_correction import DepthCorrection  # noqa: E402
 from aple.execution.pick_place_pipeline import PickPlacePipeline  # noqa: E402
 from aple.hal.replay import load_snapshot  # noqa: E402
 from aple.orchestration.cycle_manager import CycleManager  # noqa: E402
@@ -136,6 +138,10 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
     src.add_argument("--live", action="store_true", help="Piper Studio 카메라 (공유 메모리)")
     ap.add_argument("--simulation-config", type=Path, default=ROOT / "configs/simulation/piper.yaml")
     ap.add_argument("--trace", type=Path, help="시뮬레이션 이동·파지·놓기 및 왕복 검증 JSON")
+    ap.add_argument("--scene", type=Path, help="--simulate 와 함께: 실물 스냅샷(.npz 또는 폴더 첫 장)을 카메라로 쓴다. "
+                    "가상 카메라 위치는 실물 테이블 평면으로 정한다 (실측 캘리브레이션 아님)")
+    ap.add_argument("--scene-depth", help="--scene 사진의 깊이 보정 'gain,offset_per_m' (기본: 설정 live_camera.depth_correction). "
+                    "시뮬 설정은 합성 깊이용으로 보정을 끄므로 실물 사진에는 따로 적용한다. '1,0' = 보정 안 함")
     ap.add_argument("--execute", action="store_true", help="실제 로봇 실행 (--live 에서만)")
     ap.add_argument("--cycles", type=int, help="사이클 수 (기본: replay 는 파일 수, live 는 1)")
     ap.add_argument("--card", type=Path, help="card.json (기본: color.card_json 또는 replay 폴더의 card.json)")
@@ -149,11 +155,17 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
     cfg = load_config()
     world = adapter = None
     checks = []
+    scene_depth = DepthCorrection(*map(float, args.scene_depth.split(","))) if args.scene_depth \
+        else DepthCorrection.from_cfg(cfg)                   # 시뮬 설정이 덮어쓰기 전 실물 카메라 보정
     if args.simulate:
         from aple.hal.simulation import simulation_config
         cfg = simulation_config(cfg, args.simulation_config)
     elif args.trace:
         ap.error("--trace requires --simulate")
+    if args.scene and not args.simulate:
+        ap.error("--scene requires --simulate")
+    if args.scene and (args.cycles or 1) != 1:
+        ap.error("--scene 은 한 장면(1 사이클)만 — 사과를 집어도 사진은 바뀌지 않는다")
     for line in apply_overrides(cfg, args.set):
         print(f"  임시 변경 {line}")
     if args.execute and not args.live:
@@ -168,14 +180,26 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
 
     if args.simulate:
         from aple.hal.simulation import build_simulation
+        scene_snap = None
+        if args.scene:
+            files = [args.scene] if args.scene.is_file() else sorted(args.scene.glob("snap_*.npz"))
+            if not files:
+                raise SystemExit(f"{args.scene} 에 snap_*.npz 가 없다")
+            scene_snap = scene_depth.snapshot(load_snapshot(files[0], scene_id=1))
+            print(f"  실물 장면: {files[0]}  (깊이 보정 gain {scene_depth.gain:g}, offset_per_m {scene_depth.offset_per_m:g})")
         try:
-            world, adapter, checks = build_simulation(cfg)
+            world, adapter, checks = build_simulation(cfg, snapshot=scene_snap)
         except ImportError as exc:
             raise SystemExit(f"Piper 수학 모듈 로딩 실패: {exc}. Piper Studio의 robot 폴더를 PYTHONPATH에 추가하세요") from exc
         except (ValueError, RuntimeError) as exc:
             raise SystemExit(f"시뮬레이션 구성 실패: {exc}") from exc
         capture, cycles, card = world.capture, args.cycles or 1, None
         print("Piper 수치 IK/FK 왕복 검증 완료 (TCP 오프셋 포함)")
+        if scene_snap is not None:
+            folder = args.scene if args.scene.is_dir() else args.scene.parent
+            card = args.card or (folder / "card.json" if (folder / "card.json").exists() else None)
+            T = cfg["workcell"]["T_base_camera"]
+            print(f"  가상 카메라: 테이블 위 {T[2][3]:.3f} m (실물 깊이 평면 기준), 사과 {len(world.apples)}개를 가상 셀에 놓음")
     elif args.replay:
         capture = replay_source(args.replay)
         cycles = args.cycles or capture.count  # type: ignore[attr-defined]
@@ -194,7 +218,8 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         print(f"  장면 저장: {args.save}")
     capture, light_for = with_card_monitor(cfg, capture, card)
     pipeline = PickPlacePipeline(cfg, adapter)
-    runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for)))(cfg, pipeline)
+    extra = {"estimate_boxes": world.virtual_boxes} if hasattr(world, "virtual_boxes") else {}
+    runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for, **extra)))(cfg, pipeline)
 
     manager = CycleManager(cfg, capture=capture, plan_scene=runner.plan, execute_scene=runner.execute,
                            make_records=runner.records, dry_run_capture=capture, dry_run=not (args.execute or args.simulate))

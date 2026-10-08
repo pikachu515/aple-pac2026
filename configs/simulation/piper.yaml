@@ -11,6 +11,8 @@ simulation:
     - {center_m: [0.30, -0.10, 0.032], radius_m: 0.032, red_fraction: 0.1}
     - {center_m: [0.30, 0.0, 0.032], radius_m: 0.032, red_fraction: 0.5}
     - {center_m: [0.30, 0.10, 0.032], radius_m: 0.032, red_fraction: 0.9}
+live_camera:
+  depth_correction: {gain: 1.0, offset_per_m: 0.0}   # 합성 깊이는 정확하다 — 실물 카메라 보정을 적용하지 않는다
 workcell:
   tcp_offset_m: [0, 0, 0.16]
   T_base_camera: [[1, 0, 0, 0.25], [0, -1, 0, 0], [0, 0, -1, 0.65], [0, 0, 0, 1]]

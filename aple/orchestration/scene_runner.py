@@ -97,7 +97,7 @@ class SceneRunner:
         return cls(cfg, pipeline,
                    detect=lambda snap: detector.detect(snap, cfg),
                    estimate_apples=lambda snap, dets, prev: pose_estimator.estimate(snap, dets, T, prev, cfg),
-                   estimate_boxes=lambda snap: box_occupancy.estimate(snap, T, cfg),
+                   estimate_boxes=kwargs.pop("estimate_boxes", lambda snap: box_occupancy.estimate(snap, T, cfg)),
                    plan_grasps=lambda apples: grasp_planner.plan_grasps(list(apples), cfg),
                    **kwargs)
 

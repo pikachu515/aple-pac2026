@@ -28,6 +28,7 @@ import cv2
 import numpy as np
 
 from aple.hal.calibration import T_from_cfg
+from aple.hal.depth_correction import DepthCorrection
 from aple.perception.geometry import (depth_points, fit_plane_ransac, height_above_plane,
                                       project_polygon_mask, rect_base)
 from aple.schema import AppleDetection2D, SceneSnapshot, Source
@@ -44,7 +45,7 @@ _DETECT_DEFAULTS = {
     "min_area_px": 50,
     "split_min_radius_m": 0.02,
     "min_raised_fraction": 0.3,
-    "max_height_ratio": 1.3,
+    "max_height_ratio": 1.6,
     "min_circularity": 0.5,
     "reject_border": True,
 }
@@ -58,6 +59,7 @@ def detect_params(cfg: dict) -> dict:
 
 
 def detect(snap: SceneSnapshot, cfg: dict, *, model: BoxModel | None = None) -> list[AppleDetection2D]:
+    snap = DepthCorrection.from_cfg(cfg).snapshot(snap)   # 거리별 깊이 오차 (live_camera.depth_correction)
     p = detect_params(cfg)
     ycfg = cfg.get("yolo", {})
     roi = work_roi(snap, cfg)

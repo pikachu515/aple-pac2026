@@ -4,7 +4,7 @@ execution:
   act: {task_text: "Pick the apple and place it in the box", timeout_s: 30.0}
   soft_landing: {final_descent_m: 0.03, slow_speed_scale: 0.1}
   placement_verify: {height_tol_m: 0.010}   # PLACEHOLDER: 깊이 노이즈 실측 후 교체
-  trajectory: {max_joint_step_rad: 0.05, max_cartesian_step_m: null} # null: 기존 관절 보간; m 값: TCP 중간 목표 추가
+  trajectory: {max_joint_step_rad: 0.05, max_cartesian_step_m: null} # [선택] null: 기존 관절 보간; m 값: TCP 중간 목표 추가
   timeouts: {named_pose_s: 20.0, phase_a_s: 30.0, phase_b_s: 15.0, inspect_s: 30.0}
   recovery:                    # 미끄러짐 복구 동작 (PR #15 합의: 전부 저속, 공중에서 그리퍼 열기 금지)
     speed_scale: 0.2           # [임시] 복구 이동 속도. safety.speed_scale_max 이하여야 한다
@@ -12,7 +12,7 @@ execution:
     lost_grip_width_m: 0.01    # [임시] 측정 폭이 이 값 이하(완전히 닫힘)면 사과를 놓친 것 → 정지. 역할 D 실측(S8-6)과 맞출 것
   gripper:
     control_mode: fixed_effort
-    close_speed: null
+    close_speed: null           # [선택] 코드에서 쓰지 않음
     slip_width_m: 0.002
     opening_margin_m: 0.005    # 초기값: 사과 직경보다 5 mm 여유
     fixed_effort: 1000         # 0.001 N·m 단위: 1000 = 1 N·m. v0.5.12 Studio 저장값과 일치해야 실행

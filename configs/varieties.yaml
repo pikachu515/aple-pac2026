@@ -23,7 +23,8 @@ inspection:
   mask_erode_px: 2                # 마스크 가장자리 배경 섞임 제거
   highlight: {min_L: 90, max_chroma: 12}   # 정반사 하이라이트 제외
   shadow: {max_L: 15, max_fraction: 0.15}   # [임시] L* 15 미만 면적이 15% 넘으면 판정 보류·재촬영 (비율은 고치지 않는다)
-  top_view_error: 0.10            # [임시] 탑뷰 ↔ 전표면 오차 → 판정 구간 폭. truth 로 확정
+  top_view_error: 0.10            # [임시] 판정 구간 반폭 = 치우침을 뺀 뒤 남는 탑뷰 오차. truth 로 확정
+  top_view_bias: 0.0              # [임시] 탑뷰 − 전표면 평균 치우침 (+ 면 탑뷰가 높게 봄). 10/7 실측: 꼭지가 위면 평균 +0.12. truth 로 확정
   min_coverage: 0.15
   max_view_disagreement: 0.25     # [임시] 모드 B 뷰 간 편차 한계
   min_confidence: 0.5
@@ -35,7 +36,7 @@ inspection:
     max_mahalanobis: 3.37         # 3자유도 카이제곱 99% (√11.34). 미끄러지지 않은 회전 실측으로 sigma 를 맞춘다
   in_hand_mask:                   # 모드 B 촬영: 손에 든 사과 마스크 (핑거 제외, inspection/in_hand_provider.py)
     search_tol_m: 0.02            # 1차: 예측 구 표면 ± 20mm 안의 깊이 점 (미끄러져도 잡힘)
-    surface_tol_m: 0.006          # [임시] 2차: 맞춘 구 표면 ± 6mm 만 사과. 핑거 두께보다 작게
+    surface_tol_m: 0.006          # [임시] 2차: 맞춘 구 표면 뒤 6mm·앞 3mm 만 사과. 링·핑거 앞면이 사과에서 8mm 이상 떨어져야 한다
     roi_margin: 0.5               # 예측 구 투영 반지름 + 50% 범위만 본다
     min_pixels: 200               # 이보다 적으면 같은 자세에서 다시 찍는다
     retries: 1

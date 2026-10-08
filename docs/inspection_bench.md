@@ -7,7 +7,7 @@
 | 정할 값 | 도구 | 의미 |
 |---|---|---|
 | `hue_range_deg` 위쪽 경계 | `color_session.py suggest` | 착색 / 비착색을 가르는 색상각 |
-| `top_view_error` | `color_session.py truth` | 탑뷰만 보고 판정할 때 전표면과의 오차 → 판정 구간 폭 |
+| `top_view_bias` · `top_view_error` | `color_session.py truth` | 탑뷰만 보고 판정할 때 전표면과의 치우침(구간 중심 이동)과 남는 오차(구간 반폭) |
 | `delta_up` | `color_session.py curve` | '상' 판정 여유 — 리젝트율 vs 남은 오분류율 곡선에서 고른다 |
 | (확인) `min_chroma`, 하이라이트 | `analyze` 오버레이 | 그림자·반사가 착색으로 잘못 세지지 않는지 |
 
@@ -124,8 +124,6 @@ COCO 사전학습 가중치를 주면 사과만 남는다 — 한 번 받아 두
 ```bash
 # ① 색 보정값 — 회색 카드 영역 드래그
 python tools/color_session.py card    data/snapshots/1006_desk
-# ①-2 (패치를 붙였다면) 적·황·백 패치 영역을 차례로 드래그 → patch.json. 조명이 틀어질 때만 쓰는 보정
-python tools/color_session.py patches data/snapshots/1006_desk
 
 # ② 착색비율·등급 — _analysis/ 의 오버레이 이미지를 꼭 눈으로 본다
 python tools/color_session.py analyze data/snapshots/1006_desk
@@ -133,8 +131,8 @@ python tools/color_session.py analyze data/snapshots/1006_desk
 # ③ 착색 경계 제안 → 설정 파일에 바로 반영(--apply) → ② 다시
 python tools/color_session.py suggest data/snapshots/1006_desk --apply
 
-# ④ 전표면 정답 → top_view_error 반영
-python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk/card.json --apply
+# ④ 전표면 정답 → top_view_bias·top_view_error 반영 (현장에서 꼭지 위로 놓이면 --poses first, 무작위면 all)
+python tools/color_session.py truth   data/truth --card data/snapshots/1006_desk/card.json --poses first --apply
 
 # ⑤ 육안 판정과 비교
 python tools/color_session.py compare data/truth/_analysis/truth.csv --labels data/truth/labels.csv
@@ -188,7 +186,7 @@ python tools/judge_live.py --near 150 --far 1200 --card-roi <카드 x,y,w,h> --w
 ## 10. 정리
 
 - [ ] `data/snapshots/…`, `data/truth/…` 폴더를 공유 드라이브 `snapshots/` 에 업로드 (역할 A도 검출 학습에 쓴다)
-- [ ] `configs/varieties.yaml` 의 `hue_range_deg`, `top_view_error`, `delta_up` 을 바꿔 PR (`[임시]` 표시 지우기)
+- [ ] `configs/varieties.yaml` 의 `hue_range_deg`, `top_view_bias`·`top_view_error`, `delta_up` 을 바꿔 PR (`[임시]` 표시 지우기)
 - [ ] `_analysis/reject_curve.png` 와 오버레이 몇 장을 공유 드라이브 `videos/`(발표 자료)에 올리기
 - [ ] `python tools/make_figures.py` → `data/figures/` 의 설계 근거 그림 6장도 함께 (기울기 보정, 커버리지, 회색 카드, 리젝트 곡선, 그림자, 다면 검사)
 - [ ] Notion 실험 로그: 사과 수, 제안값, 일치율(⑤), 조명 실험 ΔE

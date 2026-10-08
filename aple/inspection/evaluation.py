@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from aple.inspection.coloration import InspectParams
+from aple.inspection.coloration import InspectParams, top_view_interval
 from aple.inspection.grade_classifier import decide
 from aple.schema import ColorRatio, Grade, InspectMode
 
@@ -27,9 +27,8 @@ class CurvePoint:
 
 
 def _cr(ratio: float, p: InspectParams) -> ColorRatio:
-    e = p.top_view_error
-    return ColorRatio(0, 0, InspectMode.TOP_SINGLE, ratio, max(0.0, ratio - e), min(1.0, ratio + e),
-                      1.0, 0.0, 1, p.variety)
+    est, lo, hi = top_view_interval(ratio, p)
+    return ColorRatio(0, 0, InspectMode.TOP_SINGLE, est, lo, hi, 1.0, 0.0, 1, p.variety)
 
 
 def reject_curve(measured: list[float], truth: list[Grade], p: InspectParams,

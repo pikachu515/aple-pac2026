@@ -2,7 +2,7 @@
 # 스트림은 Piper Studio 카메라 페이지에서 설정하고 프로파일로 저장한다. 여기는 기록용.
 # 주의: Piper Studio 깊이 배경 마스크는 컬러·깊이 해상도가 같아야 동작한다 (전략 S2-8).
 camera_top:
-  serial: null
+  serial: null                    # [선택] 기록용 — 실제 장치 선택은 live_camera.serial
   color: {width: 848, height: 480, fps: 30, auto_exposure: false, auto_white_balance: false}
   depth: {width: 848, height: 480, fps: 30}
   align_depth_to_color: true

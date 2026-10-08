@@ -66,3 +66,30 @@ def test_undo_restores_previous_values_in_order(cfgdir):
         fv.undo(config_dir=d, log=log)
     rows = fv.history(log)
     assert [r["new"] for r in rows] == ["0.07", "0.05", "0.07", "0.1"]    # 이력은 모두 남는다
+
+
+def test_unused_values_are_not_listed(cfgdir):
+    d, _ = cfgdir
+    keys = {p.key for p in fv.scan(d)}
+    assert "color.patch_json" not in keys                                 # [미사용 10/8] 레퍼런스 패치
+    assert "color.card_json" in keys                                      # 회색 카드는 현장에서 정한다
+
+
+def test_optional_values_are_separated_from_required(cfgdir):
+    d, _ = cfgdir
+    by_key = {p.key: p for p in fv.scan(d)}
+    assert by_key["live_camera.serial"].reason == "선택"                  # null = 첫 RealSense 자동 선택
+    assert by_key["size_bins.bins[0]"].reason == "선택"                   # open_width_mm null = 직경 + 여유
+    assert by_key["workcell.T_base_camera"].reason == "null"              # 필수는 그대로
+    assert by_key["gripper_attachment.assembled.tcp_offset_mm"].owner == "D"
+
+
+def test_set_list_item_value(cfgdir):
+    d, log = cfgdir
+    line = fv.set_value("size_bins.bins[2].open_width_mm", "92", "캘리퍼스", config_dir=d, log=log)
+    assert "open_width_mm: 92" in line and "range_mm: [70, 85]" in line
+    cfg = load_config(d)
+    assert cfg["size_bins"]["bins"][2]["open_width_mm"] == 92
+    assert cfg["size_bins"]["bins"][1]["open_width_mm"] is None               # 다른 항목은 그대로
+    fv.undo(config_dir=d, log=log)
+    assert load_config(d)["size_bins"]["bins"][2]["open_width_mm"] is None

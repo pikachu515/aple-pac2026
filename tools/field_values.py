@@ -3,7 +3,7 @@
 시뮬레이션·합성 장면 결과는 "코드가 의도대로 이어졌는가"만 보증한다. 임계값·오차·오프셋 같은 수치는
 전부 현장에서 다시 잰다. 이 도구로 남은 값을 보고, 잰 값을 설정 파일에 바로 써 넣고, 틀리면 되돌린다.
 
-    python tools/field_values.py list                      # 아직 현장 값이 아닌 것 ([임시] · PLACEHOLDER · null)
+    python tools/field_values.py list                      # 아직 현장 값이 아닌 것 ([임시] · PLACEHOLDER · null, [미사용] 은 제외)
     python tools/field_values.py list --owner C            # 역할별
     python tools/field_values.py set workcell.tcp_offset_m "[0, 0, 0.135]" --note "캘리퍼스"
     python tools/field_values.py undo                      # 마지막 변경 되돌리기
@@ -54,6 +54,10 @@ def _owner(path: Path) -> str:
 
 
 def _reason(value: str, comment: str) -> str | None:
+    if "[미사용" in comment:                                      # 쓰지 않기로 정한 값은 현장 목록에서 뺀다
+        return None
+    if "[선택" in comment:                                        # 비워 두는 게 정상 (자동 선택·계산, 다른 모드에서만 필요)
+        return "선택"
     if "[임시]" in comment:
         return "임시"
     if "PLACEHOLDER" in comment or "PLACEHOLDER" in value:
@@ -108,15 +112,56 @@ def _file_for(key: str, config_dir: Path) -> Path:
     raise KeyError(f"설정에 {top} 가 없다")
 
 
+def _steps(key: str) -> list:
+    """'size_bins.bins[0].open_width_mm' → ['size_bins', 'bins', 0, 'open_width_mm']."""
+    out: list = []
+    for part in key.split("."):
+        m = re.fullmatch(r"(.+)\[(\d+)\]", part)
+        out += [m.group(1), int(m.group(2))] if m else [part]
+    return out
+
+
 def _get(cfg: dict, key: str):
     try:
-        return reduce(lambda d, k: d[k], key.split("."), cfg)
-    except (KeyError, TypeError):
+        return reduce(lambda d, k: d[k], _steps(key), cfg)
+    except (KeyError, TypeError, IndexError):
         raise KeyError(f"설정에 {key} 가 없다 (오타 확인)") from None
 
 
+def _set_in_list(path: Path, key: str, value) -> str:
+    """'parent:' 아래 '- {a: 1, b: 2}' 리스트의 i 번째 항목 안 값을 바꾼다 (예: size_bins.bins[0].open_width_mm)."""
+    m = re.fullmatch(r"(?:.+\.)?([^.\[]+)\[(\d+)\]\.([^.]+)", key)
+    if not m:
+        raise KeyError(f"{path.name} 에서 {key} 줄을 찾지 못했다")
+    parent, idx, leaf = m.group(1), int(m.group(2)), m.group(3)
+    lines = path.read_text(encoding="utf-8").split("\n")
+    start = next((i for i, ln in enumerate(lines)
+                  if (km := _KEY_LINE.match(ln)) and km.group(2).strip() == parent), None)
+    if start is None:
+        raise KeyError(f"{path.name} 에서 {parent} 를 찾지 못했다")
+    n = -1
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line.lstrip().startswith("- "):
+            n += 1
+            if n == idx:
+                new, k = re.subn(rf"(\b{re.escape(leaf)}:\s*)([^,}}]+)",
+                                 lambda mm: mm.group(1) + _fmt(value), line, count=1)
+                if not k:
+                    break
+                lines[i] = new
+                path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+                return new
+        elif line.strip() and not line.lstrip().startswith("#") and \
+                len(line) - len(line.lstrip()) <= len(lines[start]) - len(lines[start].lstrip()):
+            break                                                    # 리스트가 끝났다
+    raise KeyError(f"{path.name} 에서 {key} 항목을 찾지 못했다")
+
+
 def _set_in_flow(path: Path, key: str, value, tag: str) -> str:
-    """'parent: {a: 1, b: 2}' 처럼 한 줄 { } 안에 있는 값을 바꾼다."""
+    """'parent: {a: 1, b: 2}' 처럼 한 줄 { } 안에 있는 값을 바꾼다. 리스트 항목(key[i])도."""
+    if "[" in key:
+        return _set_in_list(path, key, value)
     *parents, leaf = key.split(".")
     lines = path.read_text(encoding="utf-8").split("\n")
     for i, line in enumerate(lines):
@@ -196,6 +241,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list")
     ls.add_argument("--owner", help="A | B | C | D | 공통")
+    ls.add_argument("--all", action="store_true", help="[선택] 값(비워 두는 게 정상)도 보여 준다")
     st = sub.add_parser("set")
     st.add_argument("key")
     st.add_argument("value", help='YAML 값 (예: 0.004, "[0, 0, 0.135]", 특, null)')
@@ -205,13 +251,17 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     if args.cmd == "list":
-        items = [p for p in scan() if not args.owner or args.owner in p.owner]
+        found = [p for p in scan() if not args.owner or args.owner in p.owner]
+        required = [p for p in found if p.reason != "선택"]
+        optional = [p for p in found if p.reason == "선택"]
+        items = found if args.all else required
         for owner in sorted({p.owner for p in items}):
             group = [p for p in items if p.owner == owner]
             print(f"\n[역할 {owner}] {len(group)}개")
             for p in group:
                 print(f"  {p.reason:11s} {p.key:45s} = {p.value:22s} {p.comment[:60]}")
-        print(f"\n현장에서 정할 값 {len(items)}개")
+        print(f"\n현장에서 정할 필수 값 {len(required)}개 (0 이 되어야 실기 실행) · "
+              f"선택 값 {len(optional)}개 (비워 둬도 동작, --all 로 보기)")
     elif args.cmd == "set":
         print(set_value(args.key, args.value, args.note))
     elif args.cmd == "undo":

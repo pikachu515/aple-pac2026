@@ -170,3 +170,23 @@ def test_provider_requires_begin_and_uses_scene_id_source():
 def test_from_config_requires_calibration():
     with pytest.raises(ValueError, match="T_base_camera"):
         InHandCaptureProvider.from_config(load_config(), lambda: None, lambda j: np.eye(4))
+
+
+def test_ring_finger_face_on_keeps_apple_seen_through_the_hole():
+    """링형 핑거(10/7 설계 변경)가 카메라를 향할 때: 고리는 빼고, 가운데 구멍으로 보이는 사과는 잡는다."""
+    center = np.array([0.0, 0.0, 0.45])
+    color, depth, masks = render([Apple(tuple(center), RADIUS_M, PATTERN, np.eye(3))])
+    fx, fy, cx, cy = INTR
+    r_px = fx * RADIUS_M / center[2]
+    v, u = np.indices(depth.shape)
+    d = np.hypot(u - cx, v - cy) / r_px
+    ring = (d >= 0.45) & (d <= 0.75)                                       # 고리 (구멍 반지름 0.45 r)
+    hole = (d < 0.45) & masks[0]
+    depth = depth.copy()
+    depth[ring & masks[0]] -= 0.008                                       # 고리는 사과 표면보다 8 mm 앞
+    depth = np.where(depth > 0, piper_depth(depth), 0.0).astype(np.float32)
+    mask = in_hand_mask(depth, INTR, center, RADIUS_M, PARAMS)
+    assert (judged(mask, center) & ring).sum() < 0.001 * mask.sum()        # 판정 영역에 고리 픽셀 없음 (깊이 잡음 꼬리 몇 개)
+    assert (mask & hole).sum() / hole.sum() > 0.95                         # 구멍으로 보이는 사과는 잡는다
+    outer = masks[0] & (d > 0.75)
+    assert (mask & outer).sum() / outer.sum() > 0.85                       # 고리 바깥 사과도 잡는다

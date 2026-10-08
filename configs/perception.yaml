@@ -1,7 +1,7 @@
 # 인식 (설계서 9.3 perception.yaml) — 역할 A
 perception:
   tracker: {match_radius_m: 0.03}
-  sphere_fit: {ransac_threshold_m: 0.003, max_fit_residual_m: null, max_radius_disagreement: 0.25}
+  sphere_fit: {ransac_threshold_m: 0.003, max_fit_residual_m: null, max_radius_disagreement: 0.25}   # [선택] max_fit_residual_m null = 잔차 검사 안 함
   depth: {min_valid_ratio: 0.4}   # 미달 시 G1, confidence 절반
   max_clearance_m: 0.2            # 이웃·트레이 벽 간격 상한 (주변이 비었을 때)
   top_percentile: 95              # 마스크 내 점 base z 상위 분위 → 사과 꼭대기 높이

@@ -44,7 +44,8 @@ class InspectParams:
     standard: dict = field(default_factory=dict)   # 표준규격 등급별 착색비율 하한 {"특": 0.6, "상": 0.4, "보통": 0.2}
     box_boundary: str = "상"                       # UPPER 상자로 보낼 최소 등급
     mask_erode_px: int = 2
-    top_view_error: float = 0.10       # 탑뷰 ↔ 전표면 오차 (실측 전 임시값)
+    top_view_error: float = 0.10       # 탑뷰 ↔ 전표면 오차 (치우침을 뺀 뒤 남는 흔들림, 판정 구간 반폭)
+    top_view_bias: float = 0.0         # 탑뷰 − 전표면 평균 치우침 (+ 면 탑뷰가 높게 본다). 구간 중심을 이만큼 내린다
     min_coverage: float = 0.15
     max_view_disagreement: float = 0.25
     min_confidence: float = 0.5
@@ -78,6 +79,7 @@ def params_from_config(cfg: dict, variety: str | None = None) -> InspectParams:
         box_boundary=boundary,
         mask_erode_px=ins.get("mask_erode_px", 2),
         top_view_error=ins.get("top_view_error", 0.10),
+        top_view_bias=ins.get("top_view_bias", 0.0),
         min_coverage=ins.get("min_coverage", 0.15),
         max_view_disagreement=ins.get("max_view_disagreement", 0.25),
         min_confidence=ins.get("min_confidence", 0.5),
@@ -160,11 +162,24 @@ def color_ratio(snap: SceneSnapshot, det: AppleDetection2D, apple_id: int, p: In
     return None if vm is None else ratio_from_view(vm, p, snap.scene_id, apple_id)
 
 
+def top_view_interval(r: float, p: InspectParams) -> tuple[float, float, float]:
+    """탑뷰 착색비율 → (전표면 추정, 하한, 상한).
+
+    탑뷰 오차는 한쪽으로 치우친다 (10/7 실측: 꼭지가 위인 사과는 탑뷰가 +4~+18 %p, 평균 +12 높다).
+    대칭 구간 ±e 로 이 치우침을 덮으려면 e 를 크게 잡아야 하고, 그만큼 멀쩡한 사과가 경계 리젝트가 된다.
+    그래서 중심을 평균 치우침만큼 내리고(r − bias), 남는 흔들림 e 만큼만 구간을 잡는다.
+    bias 와 e 는 tools/color_session.py truth 가 같은 실측에서 함께 제안한다.
+    """
+    est = min(1.0, max(0.0, r - p.top_view_bias))
+    return est, max(0.0, est - p.top_view_error), min(1.0, est + p.top_view_error)
+
+
 def ratio_from_view(vm: ViewMeasure, p: InspectParams, scene_id: int = 0, apple_id: int = 0) -> ColorRatio:
-    r = vm.ratio_visible
+    """탑뷰 단일 뷰 → 전표면 착색비율 추정과 판정 구간. ratio 는 치우침을 뺀 전표면 추정이다."""
+    est, lo, hi = top_view_interval(vm.ratio_visible, p)
     return ColorRatio(
         scene_id=scene_id, apple_id=apple_id, inspect_mode=InspectMode.TOP_SINGLE,
-        ratio=r, ratio_lo=max(0.0, r - p.top_view_error), ratio_hi=min(1.0, r + p.top_view_error),
+        ratio=est, ratio_lo=lo, ratio_hi=hi,
         coverage=vm.coverage, view_disagreement=0.0, num_views=1, variety=p.variety,
     )
 

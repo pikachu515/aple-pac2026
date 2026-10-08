@@ -101,3 +101,46 @@ def test_missing_calib_explains_how_to_make_it(piper, tmp_path):
     shm, _, _ = piper
     with pytest.raises(SystemExit, match="save-calib"):
         judge_live.main(["--once", "--no-window", "--shm-dir", str(shm), "--calib", str(tmp_path / "none.json")])
+
+
+def test_bad_frame_does_not_end_live_judging(piper, tmp_path, monkeypatch, capsys):
+    """깊이가 잠깐 빈 프레임은 건너뛰고 다음 프레임을 판정한다 (전에는 예외 하나로 루프가 끝났다)."""
+    shm, calib, _ = piper
+    real, calls = judge_live.judge_frame, {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("유효 깊이가 부족하다")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(judge_live, "judge_frame", flaky)
+    times = iter(range(100))
+    monkeypatch.setattr(judge_live.time, "sleep", lambda s: next(times) >= 1 and (_ for _ in ()).throw(KeyboardInterrupt))
+    try:
+        judge_live.main(["--no-window", "--shm-dir", str(shm), "--calib", str(calib), "--out", str(tmp_path / "o")])
+    except KeyboardInterrupt:
+        pass
+    out = capsys.readouterr().out
+    assert "[건너뜀] 장면 1" in out and calls["n"] >= 2                  # 두 번째 프레임은 판정했다
+
+
+def test_coco_check_opens_weights_once(monkeypatch):
+    """judge_live 는 프레임마다 find_apples 를 부른다 — 가중치 확인은 한 번만 (전에는 매 프레임 모델을 열었다)."""
+    import sys
+    import types
+
+    from aple.inspection import standalone
+
+    opened = []
+
+    class FakeYOLO:
+        def __init__(self, path):
+            opened.append(path)
+            self.names = {i: f"c{i}" for i in range(80)} | {47: "apple"}
+
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
+    standalone._is_coco.cache_clear()
+    assert all(standalone._is_coco("w/yolo11n.pt") for _ in range(5))
+    assert opened == ["w/yolo11n.pt"]
+    standalone._is_coco.cache_clear()

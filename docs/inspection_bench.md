@@ -117,6 +117,10 @@ apple_03,애매
 
 ## 8. 분석
 
+사과는 대회 경로와 같은 M1 검출기(`aple/perception/detector.py`)로 찾는다. 화면에 다른 물체(의자·팔·상자)가 있으면
+COCO 사전학습 가중치를 주면 사과만 남는다 — 한 번 받아 두고(`data/models/yolo11n.pt`, git 제외) `analyze` 등에
+`--weights data/models/yolo11n.pt` 를 붙인다. 없으면 깊이·모양만으로 찾는다.
+
 ```bash
 # ① 색 보정값 — 회색 카드 영역 드래그
 python tools/color_session.py card    data/snapshots/1006_desk
@@ -173,7 +177,7 @@ python tools/color_session.py repeat  data/snapshots/1006_repeat
 systemctl --user start piper-rsd               # Piper Studio 카메라 다시 켜기
 # Piper Studio 화면: D435 켜기 → 회색 카드 보정 → 카메라 프로파일 저장
 #                    카메라 설정에서 깊이 인코딩 창(near/far) 값 확인
-python tools/judge_live.py --near 150 --far 1200 --card-roi <카드 x,y,w,h>
+python tools/judge_live.py --near 150 --far 1200 --card-roi <카드 x,y,w,h> --weights data/models/yolo11n.pt
 ```
 
 - 창에 사과마다 착색비율·등급이 실시간으로 뜬다. **s** = 현재 장면 저장(`data/live/`), **q** = 종료

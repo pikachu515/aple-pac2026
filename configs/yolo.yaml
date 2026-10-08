@@ -1,3 +1,4 @@
 # 검출 (설계서 9.3 yolo.yaml) — 역할 A
-yolo: {weights: null, task: detect, imgsz: 640, conf: 0.4, iou: 0.5, device: 'cuda:0', mask_erode_px: 0}
+yolo: {weights: null, task: detect, imgsz: 640, conf: 0.4, iou: 0.5, device: 'cuda:0', mask_erode_px: 0, classes: null}
 # mask_erode_px: 검출 마스크는 깎지 않는다 — 색 판정(inspection.mask_erode_px)이 자체적으로 깎는다. 두 번 깎으면 사과가 줄어든다
+# classes: 쓸 클래스 번호 (null = 전부). COCO 사전학습 가중치(yolo11n.pt)를 쓰면 [47] = apple 만 — 학습 없이 사과만 남는다

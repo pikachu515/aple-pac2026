@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import cv2
 import numpy as np
 
@@ -83,6 +85,44 @@ def segment_apples(color_bgr: np.ndarray, depth_m: np.ndarray, intrinsics,
 
     return [AppleDetection2D(scene_id, i, (x, y, w, hh), 1.0, m)
             for i, (_, _, x, y, w, hh, m) in enumerate(reading_order(dets), start=1)]
+
+
+COCO_APPLE = 47
+
+
+def find_apples(color_bgr: np.ndarray, depth_m: np.ndarray, intrinsics, scene_id: int = 0,
+                weights: str | None = None) -> list[AppleDetection2D]:
+    """실험 도구용 사과 찾기 — 대회 경로와 같은 M1 검출기(aple/perception/detector.py)를 쓴다.
+
+    segment_apples(깊이만, 영역·모양 검사 없음)는 화면에 의자·팔·상자처럼 솟은 물체가 있으면 그것까지
+    사과로 잡는다(2026-10-07 실측). 여기서는 M1 의 평면 맞춤·붙은 사과 분리·모양 검사를 그대로 쓴다.
+    weights 가 COCO 사전학습 가중치(yolo11n.pt 등)면 apple 클래스만 쓴다.
+    """
+    from aple.config import load_config
+    from aple.perception.detector import detect
+    from aple.schema import CaptureMode, SceneSnapshot, Source
+
+    if int((depth_m > 0).sum()) < 100 * 16:
+        raise ValueError("유효 깊이가 부족하다 — 카메라 높이·조명·케이블(USB 3) 확인")
+    cfg = load_config()
+    if weights:
+        cfg["yolo"]["weights"] = str(weights)
+        if cfg["yolo"].get("classes") is None and _is_coco(str(weights)):
+            cfg["yolo"]["classes"] = [COCO_APPLE]
+    snap = SceneSnapshot(scene_id, Source.TOP, CaptureMode.FULL, color_bgr, depth_m,
+                         tuple(float(v) for v in intrinsics), 0.0)
+    return detect(snap, cfg)
+
+
+@lru_cache(maxsize=None)
+def _is_coco(weights: str) -> bool:
+    """가중치가 COCO 80 클래스인지. 모델을 열어 봐야 하므로 가중치마다 한 번만 확인한다 (judge_live 는 매 프레임 부른다)."""
+    try:
+        from ultralytics import YOLO
+    except ImportError:                       # pragma: no cover - 설치 환경에 따라
+        return False
+    names = YOLO(str(weights)).names
+    return len(names) == 80 and names.get(COCO_APPLE) == "apple"
 
 
 def reading_order(dets: list[tuple]) -> list[tuple]:

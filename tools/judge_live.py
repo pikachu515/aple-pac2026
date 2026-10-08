@@ -125,8 +125,14 @@ def main(argv: list[str] | None = None) -> list[dict]:
             if card is None and args.card_roi:
                 card = calibrate_card(color_raw, tuple(int(v) for v in args.card_roi.split(",")))
                 print(f"회색 카드 잔여 보정 게인 R {card.rgb_gain[0]:.2f} G {card.rgb_gain[1]:.2f} B {card.rgb_gain[2]:.2f}")
-            image, rows, snap = judge_frame(color_raw, depth_enc, enc, calib, p, scene_id, card, policy,
-                                            args.weights)
+            try:
+                image, rows, snap = judge_frame(color_raw, depth_enc, enc, calib, p, scene_id, card, policy,
+                                                args.weights)
+            except ValueError as e:                     # 깊이가 잠깐 빈 프레임 하나로 실시간 판정을 끝내지 않는다
+                print(f"[건너뜀] 장면 {scene_id}: {e}")
+                if args.once:
+                    raise SystemExit(1)
+                continue
 
             if args.once:
                 save(args.out, n_saved, color_raw, snap, image)

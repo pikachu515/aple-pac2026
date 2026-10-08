@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import cv2
 import numpy as np
 
@@ -105,14 +107,16 @@ def find_apples(color_bgr: np.ndarray, depth_m: np.ndarray, intrinsics, scene_id
     cfg = load_config()
     if weights:
         cfg["yolo"]["weights"] = str(weights)
-        if cfg["yolo"].get("classes") is None and _is_coco(weights):
+        if cfg["yolo"].get("classes") is None and _is_coco(str(weights)):
             cfg["yolo"]["classes"] = [COCO_APPLE]
     snap = SceneSnapshot(scene_id, Source.TOP, CaptureMode.FULL, color_bgr, depth_m,
                          tuple(float(v) for v in intrinsics), 0.0)
     return detect(snap, cfg)
 
 
+@lru_cache(maxsize=None)
 def _is_coco(weights: str) -> bool:
+    """가중치가 COCO 80 클래스인지. 모델을 열어 봐야 하므로 가중치마다 한 번만 확인한다 (judge_live 는 매 프레임 부른다)."""
     try:
         from ultralytics import YOLO
     except ImportError:                       # pragma: no cover - 설치 환경에 따라

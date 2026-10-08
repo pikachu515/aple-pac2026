@@ -85,6 +85,8 @@ class SceneRunner:
     @classmethod
     def from_config(cls, cfg: dict, pipeline: PickPlacePipeline, **kwargs) -> "SceneRunner":
         """각 역할 모듈의 기본 구현으로 채운다. M1(detector·pose_estimator·box_occupancy·grasp_planner)은 #13."""
+        from aple.execution.gripper_geometry import apply_attachment_geometry
+        cfg = apply_attachment_geometry(cfg)
         T = cfg["workcell"].get("T_base_camera")
         if T is None:
             raise ValueError("workcell.T_base_camera is not set — run camera–robot calibration first")

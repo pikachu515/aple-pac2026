@@ -23,6 +23,9 @@ from aple.schema import (
 class FakePiperWeb:
     def __init__(self):
         self.calls = []
+        self.gripper_torque = {"iface": "follower0", "effort_nm": 1.0}
+        self.gripper_torque_status = 200
+        self.torque_after_goal = None
         self.auth_enabled = True
         self.login_ok = True
         self.goal_status = 200
@@ -75,6 +78,8 @@ class FakePiperWeb:
                             "enabled": state.auth_enabled,
                             "authenticated": False,
                         })
+                    elif self.path == "/api/robots/gripper-effort?iface=follower0":
+                        self._respond(state.gripper_torque_status, state.gripper_torque)
                     elif self.path == "/api/estop/status":
                         self._respond(200, {
                             "bus_available": state.estop_bus_available,
@@ -145,6 +150,8 @@ class FakePiperWeb:
                                     state.raw[name] = round(degrees * 1000)
                             if "gripper" in body["values"]:
                                 state.raw["gripper"] = round(body["values"]["gripper"] * 680.0)
+                            if state.torque_after_goal is not None:
+                                state.gripper_torque["effort_nm"] = state.torque_after_goal
                             self._respond(200, {"status": "ok", "goal": body["values"]})
                     elif self.path == "/api/robots/jog/stop":
                         self._respond(200, {"status": "stopped"})
@@ -183,6 +190,7 @@ def piper_web(monkeypatch):
     thread.start()
     monkeypatch.setenv("PIPER_WEB_PASSWORD", "test-password")
     cfg = {
+        "execution": {"gripper": {"fixed_effort": 1000}},
         "piper_web": {
             "enabled": True,
             "base_url": f"http://127.0.0.1:{server.server_port}",
@@ -650,9 +658,81 @@ def test_combined_arm_command_sends_calibrated_gripper_position(piper_web):
     assert any(call[1] == "/api/robots/jog/stop" for call in fake.calls)
 
 
-def test_combined_arm_command_rejects_effort_other_than_v059_fixed_value(piper_web):
+def test_combined_arm_command_rejects_effort_other_than_configured_value(piper_web):
     fake, adapter = piper_web
 
-    with pytest.raises(PiperWebError, match="hard-codes GripperCtrl effort to 1000"):
+    with pytest.raises(PiperWebError, match="command effort must match"):
         adapter.send(ArmCommand((0.0,) * 6, 0.04, 900, "scripted"))
     assert fake.calls == []
+
+
+@pytest.mark.parametrize('payload', [
+    {}, {'iface': 'other', 'effort_nm': 1},
+    {'iface': 'follower0', 'effort_nm': True},
+    {'iface': 'follower0', 'effort_nm': '1.0'},
+    {'iface': 'follower0', 'effort_nm': float('nan')},
+    {'iface': 'follower0', 'effort_nm': -1},
+    {'iface': 'follower0', 'effort_nm': 5.1},
+    {'iface': 'follower0', 'effort_nm': 1, 'supported': False},
+])
+def test_invalid_torque_payload_blocks_motion(piper_web, payload):
+    fake, adapter = piper_web
+    fake.gripper_torque = payload
+    with pytest.raises(PiperWebError):
+        adapter.send_joint_goal((0,) * 6, .5)
+    assert not any(c[1].startswith('/api/robots/jog/') for c in fake.calls)
+
+
+@pytest.mark.parametrize('status', [404, 503])
+def test_unavailable_torque_api_has_no_fixed_1000_fallback(piper_web, status):
+    fake, adapter = piper_web
+    fake.gripper_torque_status = status
+    with pytest.raises(PiperWebError, match=f'HTTP {status}'):
+        adapter.send_joint_goal((0,) * 6, .5)
+    assert not any(c[1].startswith('/api/robots/jog/') for c in fake.calls)
+
+
+def test_torque_mismatch_blocks_before_jog_start_without_setting_it(piper_web):
+    fake, adapter = piper_web
+    fake.gripper_torque['effort_nm'] = .7
+    with pytest.raises(PiperWebError, match='Studio 0.7 N·m, expected 1 N·m'):
+        adapter.send_joint_goal((0,) * 6, .5)
+    assert not any(c[1].startswith('/api/robots/jog/') for c in fake.calls)
+    assert not any(c[0] == 'POST' and 'gripper-effort' in c[1] for c in fake.calls)
+
+
+def test_torque_change_during_wait_stops_jog(piper_web):
+    fake, adapter = piper_web
+    fake.torque_after_goal = .8
+    with pytest.raises(PiperWebError, match='torque mismatch'):
+        adapter.send_joint_goal((.1, 1.57079632679, -1.4835298642, 0, 0, 0), .5)
+    assert sum(c[1] == '/api/robots/jog/goal' for c in fake.calls) == 1
+    assert any(c[1] == '/api/robots/jog/stop' for c in fake.calls)
+
+
+def test_torque_verification_uses_actual_sdk_millinewton_metre_rounding(piper_web):
+    fake, adapter = piper_web
+    fake.gripper_torque['effort_nm'] = 1.0004
+    assert adapter.verify_gripper_torque() == 1.0004
+    fake.gripper_torque['effort_nm'] = 1.0006
+    with pytest.raises(PiperWebError, match='torque mismatch'):
+        adapter.verify_gripper_torque()
+
+
+def test_read_only_torque_check_never_starts_or_writes_robot(piper_web):
+    fake, adapter = piper_web
+    from tools.check_gripper_torque import main
+    config = {'piper_web': {'enabled': False, 'iface': 'follower0'}}
+    assert main(cfg=config, make_studio=lambda cfg: adapter) == 1
+    assert config['piper_web']['enabled'] is False
+    assert not any(c[1].startswith('/api/robots/jog/') or
+                   (c[0] == 'POST' and 'gripper-effort' in c[1]) for c in fake.calls)
+
+
+@pytest.mark.parametrize('expected', [None, True, 1.0, -1, 5001])
+def test_invalid_expected_torque_refuses_without_sending(piper_web, expected):
+    fake, adapter = piper_web
+    adapter._expected_gripper_effort = expected
+    with pytest.raises(PiperWebError, match='fixed_effort'):
+        adapter.send_joint_goal((0,) * 6, .5)
+    assert not any(c[1].startswith('/api/robots/jog/') for c in fake.calls)

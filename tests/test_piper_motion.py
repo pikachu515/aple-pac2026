@@ -94,6 +94,35 @@ def make_adapter(*, safe=True):
     return adapter, transport, validator
 
 
+def test_cartesian_waypoints_preserve_lift_height_and_check_every_segment():
+    adapter, transport, validator = make_adapter()
+    transport.pose = pose(0)
+    adapter._cartesian_step_m = .02
+    requested = []
+
+    class RecordingIK(FakeIK):
+        def solve(self, target, seed):
+            requested.append(target)
+            return super().solve(target, seed)
+
+    adapter._planner._ik_solver = RecordingIK()
+    adapter._move_poses((pose(.1),), speed_scale=.2, deadline=adapter._deadline(2))
+    assert len(requested) == 5
+    assert [p.position_m[0] for p in requested] == pytest.approx([.02, .04, .06, .08, .1])
+    assert [p.position_m[2] for p in requested] == pytest.approx([.2] * 5)
+    assert len(validator.calls) >= 5
+
+
+@pytest.mark.parametrize('step', [0, -1, float('nan'), True])
+def test_invalid_cartesian_step_is_rejected_before_motion(step):
+    cfg = {'safety': {'joint_limits_rad': [(-1., 1.)]*6},
+           'execution': {'trajectory': {'max_joint_step_rad': .1, 'max_cartesian_step_m': step}}}
+    transport = FakeTransport()
+    with pytest.raises(ValueError):
+        PiperTrajectoryMotionAdapter(transport, cfg, FakeIK(), SafeSegments())
+    assert not transport.calls
+
+
 def test_adapter_moves_through_checked_ik_steps_and_uses_requested_speed():
     adapter, transport, validator = make_adapter()
     target = MotionTargets(

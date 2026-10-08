@@ -1,0 +1,26 @@
+# 수제 사과용 어댑터 — 기존 전동 그리퍼의 움직이는 좌우 핑거에 각각 장착.
+# 사용자 확인: 사진의 치수는 전부 mm. _mm 값을 코드에서 SI(m)로 변환한다.
+gripper_attachment:
+  installed: false             # 실제 장착 후 true. true이면 아래 장착 기하가 모두 필요하다
+  mounting: existing_moving_fingers
+  reference:
+    image: "ChatGPT Image Oct 7, 2026, 05_46_40 PM.jpg"
+    # 치수선/동그라미 사이 거리. X/Y/Z·두께·폭·TCP와의 대응은 아직 확정하지 않았다.
+    point_distances_mm:
+      D1: 48.144
+      D2: 48.464
+      D3: 71.76
+      D4: 79.76
+    nominal_base_opening_range_mm: [0, 100] # 해당 매뉴얼 기본 그리퍼 사양; 실물/Studio 캘리브레이션과 구분
+    manual_url: "https://cdn.shopify.com/s/files/1/0673/6848/5000/files/AgileX_PIPER_Product_User_Manual.pdf?v=1782228874#page=9"
+  assembled:
+    tcp_axes_match_flange: null # true: 현재 TCP 보정은 이동만 지원. 축이 다르면 회전 보정 필요
+    tcp_offset_mm: null        # 플랜지 원점 → 고정 파지 기준점, 플랜지 좌표계 [x,y,z]
+    # Studio 정규화 명령 0/100에 대응하는 어댑터 접촉면 간격. 기본 0–100을 복사하지 않는다.
+    contact_width_range_mm: null
+    finger_thickness_mm: null  # 닫힘 방향의 보수적 외형 두께 (패드 포함)
+    finger_width_mm: null      # 닫힘 방향에 수직인 보수적 외형 폭
+    grasp_height_offset_mm: null # 사과 중심 기준 파지 높이, 부호 있는 mm
+    # 전체 개폐 범위에서 새 어댑터를 덮는 구. 중심은 플랜지 좌표계, 반지름은 mm.
+    # 예: [{center_mm: [x,y,z], radius_mm: r}, ...]. 사진의 점 거리만으로 자동 생성하지 않는다.
+    collision_spheres_flange_mm: null

@@ -2,6 +2,7 @@
 
     python tools/run_cycle.py --replay data/snapshots/1006_desk     # 저장한 스냅샷으로 드라이런 (로봇 안 움직임)
     python tools/run_cycle.py --live --cycles 3                      # Piper 카메라로 판정·계획까지 (로봇 안 움직임)
+    PYTHONPATH=/path/to/wego-piper-web/robot python tools/run_cycle.py --simulate --trace logs/simulation/trace.json
     python tools/run_cycle.py --live --execute --cycles 1            # 실제 로봇 실행 (빠진 부품이 있으면 거부)
 
 현장에서 바로 고치기 (시뮬레이션 결과는 참고만 — 실제 장면으로 확인한다)
@@ -16,12 +17,14 @@
 필요한 것
   M1 인식·캘리브레이션 (#13): aple.perception.*, workcell.T_base_camera
   카드 보정 (#20): color.card_json 이 있으면 CardMonitor 로 색 보정 + 조명 상태. 없으면 보정 없이 진행
-  실행(--execute): 순기구학 공급자·TCP 오프셋(#24), 구간 안전 검사기(SegmentValidator)
+  가상 실행(--simulate): Piper 수학 모듈 + configs/simulation/piper.yaml
+  실기 실행(--execute): 실측 설정과 실기 속도·충돌 검증 및 전송 연결 필요
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from functools import reduce
 from pathlib import Path
@@ -110,8 +113,8 @@ def missing_for_execution(cfg: dict) -> list[str]:
         missing.append("workcell.T_base_camera - 카메라-로봇 캘리브레이션 (역할 A, #13 tools/touch_calib.py)")
     if cfg["workcell"].get("tcp_offset_m") is None:
         missing.append("workcell.tcp_offset_m - 핑거 어댑터 장착 후 TCP 오프셋 실측 (역할 D, 이슈 #24)")
-    missing.append("실행 어댑터 연결 - 순기구학 tool_pose_provider, IK 의 TCP->플랜지 변환, "
-                   "구간 안전 검사기 SegmentValidator (역할 B, 이슈 #24). 들어오면 run_cycle 에 연결한다")
+    missing.append("실기 실행 연결·검증 - TCP IK/FK 및 SegmentValidator는 구현됨. "
+                   "실기 속도·데드맨, 추가 핑거/사과·자기 충돌 검증 후 연결 필요 (역할 B, #24)")
     return missing
 
 
@@ -121,7 +124,7 @@ def print_records(records: list[CycleRecord]) -> None:
         target = f"{r.target_box.name}#{r.target_cell}" if r.target_cell >= 0 else "-"
         print(f"  {r.scene_id:>5} {r.apple_id:>4} {r.diameter_m * 1000:>6.1f} "
               f"{r.ratio:>6.2f} [{r.ratio_lo:.2f}, {r.ratio_hi:.2f}] {r.grade.name:>6} {r.reject_reason.name:>9} "
-              f"{r.task_action.name:>18} {target:>10} {'성공' if r.success else '-':>4}")
+              f"{r.task_action.name:>18} {target:>10} {'성공' if r.success else r.failure_code.name:>4}")
 
 
 def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlacePipeline], SceneRunner] | None = None,
@@ -129,7 +132,10 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--replay", type=Path, help="스냅샷(.npz) 폴더로 드라이런")
+    src.add_argument("--simulate", action="store_true", help="장치 없는 실제 Piper IK/FK 시뮬레이션")
     src.add_argument("--live", action="store_true", help="Piper Studio 카메라 (공유 메모리)")
+    ap.add_argument("--simulation-config", type=Path, default=ROOT / "configs/simulation/piper.yaml")
+    ap.add_argument("--trace", type=Path, help="시뮬레이션 이동·파지·놓기 및 왕복 검증 JSON")
     ap.add_argument("--execute", action="store_true", help="실제 로봇 실행 (--live 에서만)")
     ap.add_argument("--cycles", type=int, help="사이클 수 (기본: replay 는 파일 수, live 는 1)")
     ap.add_argument("--card", type=Path, help="card.json (기본: color.card_json 또는 replay 폴더의 card.json)")
@@ -137,8 +143,17 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="이번 실행에만 설정값을 바꾼다 (반복 가능, 파일은 그대로)")
     args = ap.parse_args(argv)
+    if args.cycles is not None and args.cycles <= 0:
+        ap.error("--cycles must be positive")
 
     cfg = load_config()
+    world = adapter = None
+    checks = []
+    if args.simulate:
+        from aple.hal.simulation import simulation_config
+        cfg = simulation_config(cfg, args.simulation_config)
+    elif args.trace:
+        ap.error("--trace requires --simulate")
     for line in apply_overrides(cfg, args.set):
         print(f"  임시 변경 {line}")
     if args.execute and not args.live:
@@ -151,7 +166,17 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
                 print(f"  - {m}")
             raise SystemExit(2)
 
-    if args.replay:
+    if args.simulate:
+        from aple.hal.simulation import build_simulation
+        try:
+            world, adapter, checks = build_simulation(cfg)
+        except ImportError as exc:
+            raise SystemExit(f"Piper 수학 모듈 로딩 실패: {exc}. Piper Studio의 robot 폴더를 PYTHONPATH에 추가하세요") from exc
+        except (ValueError, RuntimeError) as exc:
+            raise SystemExit(f"시뮬레이션 구성 실패: {exc}") from exc
+        capture, cycles, card = world.capture, args.cycles or 1, None
+        print("Piper 수치 IK/FK 왕복 검증 완료 (TCP 오프셋 포함)")
+    elif args.replay:
         capture = replay_source(args.replay)
         cycles = args.cycles or capture.count  # type: ignore[attr-defined]
         card = args.card or (args.replay / "card.json" if (args.replay / "card.json").exists() else None)
@@ -163,21 +188,32 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         cycles = args.cycles or 1
         card = args.card
 
-    print(f"{'실행' if args.execute else '드라이런'} - {cycles} 사이클")
+    print(f"{'시뮬레이션' if args.simulate else '실행' if args.execute else '드라이런'} - {cycles} 사이클")
     if args.save:
         capture = saving(capture, args.save)
         print(f"  장면 저장: {args.save}")
     capture, light_for = with_card_monitor(cfg, capture, card)
-    pipeline = PickPlacePipeline(cfg)            # 실행 어댑터는 missing_for_execution 이 비면 여기서 연결한다
+    pipeline = PickPlacePipeline(cfg, adapter)
     runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for)))(cfg, pipeline)
 
     manager = CycleManager(cfg, capture=capture, plan_scene=runner.plan, execute_scene=runner.execute,
-                           make_records=runner.records, dry_run_capture=capture, dry_run=not args.execute)
+                           make_records=runner.records, dry_run_capture=capture, dry_run=not (args.execute or args.simulate))
     records = manager.run(cycles)
     print_records(records)
     blocked = [r for r in records if r.failure_code.name == "ABORTED" and r.target_cell < 0]
     if blocked:
         print("※ 실행하지 않은 장면이 있다 - 조명 FAULT 면 회색 카드 재보정 후 다시 (전략 S3-8)")
+    if world is not None:
+        print(f"  가상 이동 {sum(e['action'] == 'move' for e in world.events)}회, "
+              f"파지 {sum(e['action'] == 'grasp' for e in world.events)}회, "
+              f"놓기 {sum(e['action'] == 'release' for e in world.events)}회, "
+              f"가상 이동 시간 {world.elapsed_s:.2f}s")
+        if args.trace:
+            args.trace.parent.mkdir(parents=True, exist_ok=True)
+            args.trace.write_text(json.dumps(dict(roundtrip=checks, events=world.events,
+                                                apples=world.apples), indent=2), encoding="utf-8")
+        if any(not r.success for r in records if r.task_action.name in ('PICK_PLACE', 'PICK_INSPECT_PLACE')):
+            raise SystemExit("시뮬레이션 실행 실패: 위 결과와 trace를 확인하세요")
     return records
 
 

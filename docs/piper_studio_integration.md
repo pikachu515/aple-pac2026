@@ -87,7 +87,29 @@ Piper Studio 조명 감시는 64×64 축소 영상의 밝기·log(R/G)·log(B/G)
 
 ## 6. 남은 확인 (실기)
 
-- [ ] `piper_shm.Subscriber` 로 `rs:<시리얼>:color` · `:depth` 를 같은 시각에 읽는 방법 (두 세그먼트의 시각 차)
+- [x] 컬러·깊이 세그먼트를 같은 시각에 읽기 — `aple/hal/shm_frames.py` `read_pair` (시각 차 50 ms 이내만), 실기 확인 (10/7)
 - [ ] 우리 프로그램이 Piper Studio 와 같은 Python 환경에서 `piper_shm` 을 import 할 수 있는지 (설치 경로)
-- [ ] 깊이 인코딩 창 현재값을 코드에서 읽는 방법 (`info()` 의 `depth_encoding`)
-- [ ] 실제 D435 에서 `--save-calib` 값 확인 (이동 약 15 mm 근처인지)
+- [x] 깊이 인코딩 창 현재값 — `GET /api/cameras/current` 의 깊이 카메라 `depth_encoding` (`near_mm`, `far_mm`) (10/7)
+- [x] 실제 D435i 에서 `--save-calib` — 기준선 14.52 mm, 회전 0.29° (10/7, `configs/calib/d435.json`)
+
+## 7. 실기에서 확인한 것 (10/7, v0.5.12 · D435i)
+
+**스트림은 소비자가 있을 때만 발행된다.** rsd 는 스트림마다 연결 수를 세고, 미리보기·녹화·추론이 하나도 없으면
+그 스트림의 발행을 멈춘다. 카메라 설정 창을 닫자 깊이 세그먼트가 멈춰 `judge_live.py` 가 "프레임을 기다리는 중"
+에서 섰다. 판정 모듈처럼 공유 메모리만 읽는 프로그램은 `POST /api/cameras/connect {"id": "rs:<시리얼>:depth"}`
+(컬러도 같이)로 스트림을 붙잡아야 한다. 녹화·추론 중이면 이미 붙어 있다.
+
+**다시 연결하면 파이프라인이 재시작되고, 컬러 프로파일이 따라오지 않을 수 있다.** 깊이만 다시 연결했을 때 컬러가
+자동 노출로 돌아갔다. 연결 뒤 `POST /api/cameras/profiles/apply {"name": "pac-top"}` 로 다시 적용하고
+`GET /api/cameras/profiles/report` 로 `failed` 가 0 인지 본다.
+
+**30 fps 에서 노출 상한은 33 ms.** 어두운 곳에서 회색 카드 보정이 36.4 ms 를 골랐고, 프로파일 재적용 때
+노출만 `failed` 로 남았다(화이트밸런스·자동 끄기는 적용). 조명을 밝히거나 카메라 설정의
+"노출 고정 — 밝기는 gain 으로만" 으로 보정한다.
+
+**대회 경로 검증 (inspection_bench 9-1).** 사과 5개를 움직이지 않고 같은 장면을 Piper 공유 메모리 경로
+(8비트 깊이 → 정렬)와 직접 경로(`capture_snapshot.py`, 같은 노출)로 판정했다.
+
+| | 등급 | 착색비율 차 | 직경 차 |
+|---|---|---|---|
+| Piper 경로 vs 직접 경로 | 5/5 일치 | 0 ~ 5 %p | 2 mm 이내 |

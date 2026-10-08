@@ -24,6 +24,7 @@ GitHub PR 1~25 중 존재하는 24개 PR의 본문·일반 댓글·리뷰·코�
 
 ```python
 monitor = CardMonitor.from_config(cfg, live_camera)
+ik, fk = build_piper_kinematics(cfg)  # tcp_offset_m 실측 필수, 같은 변환/geometry 사용
 studio = PiperStudio(cfg, snapshot_provider=monitor.capture,
                      lighting_status_provider=monitor)
 provider = InHandCaptureProvider.from_config(
@@ -72,3 +73,44 @@ manager = CycleManager(
   DROP F3, 이송·적재 F4. IDLE에서 실행 보류/게이트 차단은 물리 단계 실패로 집계하지 않는다.
 - 모드 B 최종 배치 불가도 원래 계획이 아닌 최종 실행 항목 기준으로 P1을 기록한다.
 - `.gitignore`에 `logs/`를 추가해 CSV 실행 기록을 커밋 대상에서 제외한다.
+
+## TCP 오프셋 및 FK 보완
+
+`execution.trajectory.build_piper_kinematics(cfg)`는 한 실측 `PiperTCPTransform`과 동일한
+Piper geometry를 사용하는 IK/FK 쌍을 만든다. 설정은 플랜지 좌표계의 [x, y, z] m이며
+TCP 축은 플랜지 축과 같다는 가정이다. 핑거 장착 후 역할 D가 실측한다. null/비정상 값은
+어댑터 구성 전에 거부한다. 명시적 [0, 0, 0]은 영 오프셋 테스트/검증된 도구에만 사용한다.
+
+- IK: `T_base_flange = T_base_tcp @ inv(T_flange_tcp)`를 Piper 수치 IK에 전달.
+- FK: `link_transforms(q_rad[None, :], geometry)[0, tip_index] @ T_flange_tcp`를 Pose3D로 반환.
+- `build_piper_motion_adapter`는 Piper IK 사용 시 설정값 및 FK 오프셋 일치를 확인한다.
+- `joint_state()`가 이미 raw millidegree를 rad로 바꾸므로 FK에서 재변환하지 않는다.
+- FK 객체는 파지 transport와 촬영 공급자에 동일하게 전달한다.
+- 합성 해석 모델의 왕복/회전/영 오프셋·결측 잠금·잘못된 FK 변환 검증은 테스트로 확인한다.
+  실제 Piper geometry와 수치 IK, TCP 실측의 검증을 대신하지 않는다.
+
+Piper 공식 근거: [kinematics.py](https://github.com/WeGo-Robotics/wego-piper-web/blob/main/robot/piper_robot/kinematics.py).
+
+## 시뮬레이션 실행 연결
+
+최신 main의 #25/#26 실행 도구에 `--simulate`를 연결했다. 구간 안전 검사, named-pose 검사,
+실제 Piper 수학 모델 오프셋 0/비영 왕복, 사과 3개의 판정→파지→저속 적재→기록을 검증한다.
+실기 속도·데드맨·추가 툴/사과 및 자기 충돌 검증은 남아 있으며 `--live --execute`는 계속 거부한다.
+모드 B·ACT·손상/마찰 동역학은 시뮬레이션 범위에 포함하지 않는다. [실행 방법](simulation.md).
+
+## Piper Studio v0.5.12 토크 호환성
+
+`PiperStudio.gripper_torque_nm`은 팔별 설정 토크(N·m)를 읽고,
+`verify_gripper_torque`는 `execution.gripper.fixed_effort`의 SDK 단위(0.001 N·m)와 비교한다.
+조그 시작·목표 전송·도달 대기에서 불일치/조회 실패를 거부하며 시작한 조그는 종료한다.
+`tools/check_gripper_torque.py`는 이동/설정 변경 없이 확인만 한다. 자동 토크 조절·접촉 힘(N)
+보정은 추가하지 않았다. 테스트는 localhost 가짜 0.5.12 서버 기준이며 실기 확인은 별도다.
+
+## 수제 좌우 핑거 어댑터 설정
+
+사용자가 확인한 사진의 점 사이 거리 48.144 / 48.464 / 71.76 / 79.76은 모두 mm로
+기록했다. 장착 기하가 완성되면 같은 설정에서 TCP, HAL·명령 게이트의 접촉면 간격,
+M1 파지 후보의 핑거 외형, 파지 높이, 구간 검사 추가 충돌 구를 구성한다.
+기본 매뉴얼의 0–100 mm는 참조만 하며 실제 접촉면 간격으로 대입하지 않는다.
+현재 미확정 장착 값은 null, installed는 false다. 활성화 후 누락 값은 거부한다.
+[구체적인 설정 항목과 확인 방법](gripper_attachment.md).

@@ -44,7 +44,8 @@ class CommandGate:
     """Gate individual commands before an adapter is allowed to publish them."""
 
     def __init__(self, cfg: dict) -> None:
-        self._cfg = cfg
+        from aple.execution.gripper_geometry import apply_attachment_geometry
+        self._cfg = apply_attachment_geometry(cfg)
         self._last_safe_arm_command: ArmCommand | None = None
         self._last_safe_gripper_command: GripperCommand | None = None
 

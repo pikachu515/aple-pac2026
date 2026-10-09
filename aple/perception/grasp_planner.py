@@ -43,6 +43,12 @@ _DEFAULTS = {
     "approach_height_m": 0.08,
     "tool_down_rpy_deg": [180.0, 0.0, 0.0],
     "max_clearance_m": 0.2,
+    "min_open_margin_m": 0.002,     # 틈이 좁으면 한쪽 여유를 이만큼까지 줄인다 (open_margin_m → 이 값)
+    "adaptive_open": False,         # True 면 후보의 open_width_m 으로 그리퍼를 그만큼만 벌린다
+    "tilt_yaw_dev_deg": 0.0,        # 기울여 잡을 때 접선 방향에서 yaw 를 이만큼까지 돌려 틈을 찾는다
+    "tilt_yaw_free_below_deg": 0.0, # 기울기가 이보다 작으면 yaw 를 제한하지 않는다 (두 핑거 높이 차가 작다)
+    "tray_wall_margin_m": 0.0,      # 트레이 사각형을 이만큼 넓혀 벽으로 본다
+    "tray_open_sides": [],          # 벽이 없는 변: x_min · x_max · y_min · y_max (base 축)
     "tilt_start_m": None,           # null = 기울이지 않는다 (항상 수직)
     "tilt_full_m": 0.62,
     "max_tilt_deg": 25.0,
@@ -78,6 +84,7 @@ class GraspCandidate:
     min_clearance_m: float
     collision_free: bool
     score: float
+    open_width_m: float | None = None   # 틈에 맞춘 사전 개방 폭 (핑거 안쪽 면 사이). None = 그리퍼 기본값
 
 
 def grasp_params(cfg: dict) -> dict:
@@ -100,28 +107,33 @@ def plan_grasps(apples: list[AppleState], cfg: dict) -> list[GraspCandidate]:
             continue
         r = a.diameter_m / 2
         c = np.asarray(a.center_m[:2])
-        reach = r + p["open_margin_m"] + p["finger_thickness_m"] / 2
         others = [(np.asarray(b.center_m[:2]), b.diameter_m / 2) for b in apples if b is not a]
-        best_yaw, best_clear = 0.0, -math.inf
         tilt = tilt_for(c, p)
         phi = math.atan2(float(c[1]), float(c[0]))
-        if tilt > 0:                                    # 기울이면 접선 방향으로만 닫는다
-            yaws_here = np.array([(phi + math.pi / 2) % math.pi])
+        if 0 < tilt and math.degrees(tilt) >= float(p["tilt_yaw_free_below_deg"]):
+            # 많이 기울이면 접선 방향 근처로만 닫는다 — 반지름 방향으로 닫으면 두 핑거 높이가 크게 달라진다
+            dev = math.radians(float(p["tilt_yaw_dev_deg"]))
+            base_yaw = (phi + math.pi / 2) % math.pi
+            yaws_here = np.array([base_yaw + d for d in np.arange(-dev, dev + 1e-9, step)]) if dev > 0 \
+                else np.array([base_yaw])
         else:
             yaws_here = yaws
+        # 틈에 맞춰 벌린다 (10/9 실기: 붙어 놓인 사과 줄). 한쪽 여유 m 을 open_margin_m 부터 min_open_margin_m
+        # 까지 줄여 가며, 핑거 발자국이 이웃 사과·트레이 벽과 min_clearance_m 이상 떨어지는 가장 큰 m 을 쓴다.
+        margins = np.arange(float(p["open_margin_m"]), float(p["min_open_margin_m"]) - 1e-9, -0.001)
+        best = None                                     # (가능, m, 간격, yaw)
         for yaw in yaws_here:
             u = np.array([math.cos(yaw), math.sin(yaw)])
-            clear = cap
-            for s in (1.0, -1.0):
-                f = c + s * reach * u
-                for oc, orad in others:
-                    clear = min(clear, float(np.linalg.norm(f - oc)) - orad - fr)
-                if tray.get("center_m") is not None:
-                    tx, ty, _ = tray["center_m"]
-                    hx, hy = tray["size_m"][0] / 2, tray["size_m"][1] / 2
-                    clear = min(clear, hx - abs(f[0] - tx) - fr, hy - abs(f[1] - ty) - fr)
-            if clear > best_clear + 1e-9:                    # 동률이면 먼저 본 yaw (0° 쪽) 유지
-                best_yaw, best_clear = float(yaw), clear
+            for m in margins:
+                clear = _finger_clearance(c, u, r + m + p["finger_thickness_m"] / 2, others, tray, fr, cap, p)
+                ok = clear >= p["min_clearance_m"]
+                key = (ok, float(m) if ok else 0.0, clear)
+                if best is None or key > best[:3]:
+                    best = (*key, float(yaw) % math.pi)
+                if ok:
+                    break                               # 이 yaw 에서 가능한 가장 넓은 여유를 찾았다
+        ok, m_best, best_clear, best_yaw = best
+        open_width = 2 * (r + (m_best if ok else float(p["open_margin_m"])))
         R = rpy_to_matrix(0.0, 0.0, best_yaw) @ R_down
         approach = (0.0, 0.0, 1.0)
         if tilt > 0:
@@ -133,8 +145,29 @@ def plan_grasps(apples: list[AppleState], cfg: dict) -> list[GraspCandidate]:
         out.append(GraspCandidate(
             scene_id=a.scene_id, apple_id=a.apple_id, grasp_pose=pose, grasp_yaw_rad=best_yaw,
             approach_vector=approach, approach_height_m=float(p["approach_height_m"]),
-            min_clearance_m=reported, collision_free=bool(best_clear >= p["min_clearance_m"]), score=reported))
+            min_clearance_m=reported, collision_free=bool(ok), score=reported + (m_best if ok else 0.0),
+            open_width_m=float(open_width) if p["adaptive_open"] else None))
     return out
+
+
+def _finger_clearance(c, u, reach, others, tray, fr, cap, p) -> float:
+    """핑거 두 발자국(사과 중심 ± reach·u)과 이웃 사과·트레이 벽 사이 최소 간격."""
+    clear = cap
+    for s in (1.0, -1.0):
+        f = c + s * reach * u
+        for oc, orad in others:
+            clear = min(clear, float(np.linalg.norm(f - oc)) - orad - fr)
+        if tray.get("center_m") is not None:
+            tx, ty, _ = tray["center_m"]
+            wm = float(p["tray_wall_margin_m"])
+            hx, hy = tray["size_m"][0] / 2 + wm, tray["size_m"][1] / 2 + wm
+            open_sides = set(p["tray_open_sides"] or ())   # 벽이 없는 변 (자동 집는 영역의 종이 쪽 경계)
+            for axis, (ctr, half) in enumerate(((tx, hx), (ty, hy))):
+                d = f[axis] - ctr
+                side = ("x" if axis == 0 else "y") + ("_min" if d < 0 else "_max")
+                if side not in open_sides:
+                    clear = min(clear, half - abs(d) - fr)
+    return clear
 
 
 def tool_orientation_at(center_xy, cfg: dict, yaw_rad: float | None = None) -> tuple[float, float, float, float]:

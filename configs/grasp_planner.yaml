@@ -9,6 +9,13 @@ grasp_planner:
   approach_height_m: 0.08         # 집기 전 자세 = 집는 자세 위 이 높이
   tool_down_rpy_deg: [180, 0, 0]  # [임시] TCP 가 아래를 보는 자세 (base_link RPY). 역할 B IK 규약과 맞춘다
   max_clearance_m: 0.2
+  # 붙은 사과 사이로 핑거를 넣는다 (10/9 실기: 사과를 붙여 놓은 줄)
+  min_open_margin_m: 0.003        # [임시 10/9] 틈이 좁으면 한쪽 여유를 open_margin_m 에서 이 값까지 줄인다
+  adaptive_open: true             # [임시 10/9] 그리퍼를 후보가 정한 폭(사과 + 2 × 여유)만큼만 벌린다
+  tilt_yaw_dev_deg: 30            # [임시 10/9] 기울여 잡을 때 접선에서 ±이 각도까지 돌려 틈을 찾는다
+  tilt_yaw_free_below_deg: 12     # [임시 10/9] 기울기 12° 미만이면 어느 방향으로든 닫는다 (두 핑거 높이 차 ≤ 2r·sin12° ≈ 17 mm)
+  tray_wall_margin_m: 0.0         # 트레이 사각형을 이만큼 넓혀 벽으로 본다
+  tray_open_sides: [x_min]        # [10/9 배치] 집는 영역의 로봇 쪽 변은 흰 종이(리젝트)와 맞닿아 벽이 없다
   # 먼 사과는 그리퍼를 바깥쪽으로 기울여 잡는다 (10/9 실기: 수직 파지는 베이스에서 수평 약 0.56 m 까지)
   tilt_start_m: 0.30              # [임시 10/9] 이 거리부터 기울이기 시작 (null = 항상 수직). 18 cm 그리퍼 수직 파지는 수평 ~0.31 m 까지
   tilt_full_m: 0.60               # [임시 10/9] 이 거리에서 max_tilt_deg (20° ≈ 0.53 m, 30° ≈ 0.60 m 까지 닿음)

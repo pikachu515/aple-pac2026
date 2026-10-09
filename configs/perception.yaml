@@ -19,6 +19,12 @@ perception:
     max_height_ratio: 1.6         # [임시] 꼭대기 높이 / 직경 상한 — 넘으면 기둥·팔·상자 벽 (구는 ≈ 1). 10/7 실물 50개(깊이 보정 후) 0.74~1.29 → 1.3 은 여유가 없다
     min_circularity: 0.5          # [임시] 둥근 정도 4πA/P² 하한 — 가늘고 긴 물체 제외 (반으로 가른 사과 ≈ 0.7)
     reject_border: true           # 화면 가장자리에 걸린 덩어리는 잘린 물체라 버린다
+    roi_margin_m: 0.06            # [10/9 실기] 집는 영역 경계에 걸친 사과를 통째로 — ROI 를 이만큼 넓혀 덩어리를 찾는다
+    keep_margin_m: 0.03           # [10/9 실기] 중심이 집는 영역 + 이 여유 안인 사과만 (리젝트 종이·상자 안 사과 제외)
+    split_by_height: false        # 높이 지도 정수리로도 나눈다 — 10/9 현장 깊이가 흔들려 끔 (segment: color 사용)
+    min_apple_color: 0.3          # [10/9 실기] 마스크 안 사과색(빨강~노랑) 비율 하한 — 파란 트레이 벽 조각 제외
+    segment: color                # [10/9 실기] color: 사과색 픽셀을 모양(거리 변환)으로 나눈다 / depth: 솟은 픽셀
+    color: {hue_max: 40, hue_min_wrap: 150, sat_min: 60, open_px: 3, close_px: 7}   # OpenCV HSV (H 0~180). 파랑 ~100, 흰 종이는 채도 낮음
   box:                            # aple/perception/box_occupancy.py
     height_percentile: 90
     cell_margin_m: 0.01

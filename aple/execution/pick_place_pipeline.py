@@ -135,6 +135,20 @@ class ModeBResult:
     recovery: SlipRecoveryResult | None = None
 
 
+def _with_candidate_opening(profile, candidate, cfg):
+    """파지 후보가 틈에 맞춘 개방 폭(open_width_m)을 주면 그만큼만 벌린다 (그리퍼 실측 범위 안으로 자른다).
+
+    10/9 실기: 사과가 붙어 놓이면 기본 개방 폭으로는 이웃 사과에 핑거가 닿아 보류됐다."""
+    width = getattr(candidate, "open_width_m", None)
+    if width is None or not profile.feasible:
+        return profile
+    lo_hi = cfg.get("piper_web", {}).get("gripper_width_range_m")
+    if lo_hi is not None:
+        width = min(max(float(width), float(lo_hi[0])), float(lo_hi[1]))
+    from dataclasses import replace as _replace
+    return _replace(profile, open_width_m=float(width))
+
+
 class PickPlacePipeline:
     """Join scene signals by the shared ``(scene_id, apple_id)`` contract."""
 
@@ -216,7 +230,9 @@ class PickPlacePipeline:
             raise ValueError("grasp_candidates must match an AppleState in the scene")
 
         profiles = {
-            (apple.scene_id, apple.apple_id): select_grasp_profile(apple, self._cfg)
+            (apple.scene_id, apple.apple_id): _with_candidate_opening(
+                select_grasp_profile(apple, self._cfg), candidates_by_key.get((apple.scene_id, apple.apple_id)),
+                self._cfg)
             for apple in apples
         }
         candidate_clearance = {

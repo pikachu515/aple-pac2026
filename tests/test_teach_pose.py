@@ -56,3 +56,12 @@ def test_iface_override_enables_read_only_in_memory():
     finally:
         ps.PiperStudio = original
     assert seen["enabled"] is True and seen["iface"] == "can_follower"
+
+
+def test_teach_box_hover_pose(tmp_path):
+    workcell = pristine_copy("workcell.yaml", tmp_path / "workcell.yaml")
+    before = yaml.safe_load(workcell.read_text(encoding="utf-8"))["workcell"]["poses"]
+    teach_pose.main(["hover_MIDDLE", "--workcell", str(workcell)], joint_reader=lambda cfg, iface: POSE)
+    poses = yaml.safe_load(workcell.read_text(encoding="utf-8"))["workcell"]["poses"]
+    assert poses["hover_MIDDLE_joint_rad"] == pytest.approx(POSE)
+    assert poses["hover_UPPER_joint_rad"] == before["hover_UPPER_joint_rad"]   # 다른 자세는 그대로

@@ -1,8 +1,10 @@
-"""이름 붙은 관절 자세(home·scan) 가르치기 — 텔레오퍼레이션으로 팔로워를 그 자세에 두고 관절각을 저장한다.
+"""이름 붙은 관절 자세(home·scan·hold·상자 위) 가르치기 — 텔레오퍼레이션으로 팔로워를 그 자세에 두고 관절각을 저장한다.
 
 실기 실행(tools/run_cycle.py --live --execute)은 workcell.poses.home_joint_rad · scan_joint_rad 가 있어야 한다.
   home: 시작·종료·복구 자세 (팔이 탑뷰를 가리지 않고 테이블에서 충분히 높게)
   scan: 탑뷰 촬영 자세 (팔과 그림자가 트레이·상자를 가리지 않게)
+  hold: ACT ① (집기·다면 보여주기) 가 사과를 들고 멈추는 자세
+  hover_UPPER|hover_MIDDLE|hover_REJECT: 등급 상자 위 — 스크립트가 여기까지 옮기고 ACT ② 가 아래 빈 칸에 놓는다
 
     python tools/teach_pose.py home --iface can_follower --dry-run    # 지금 관절각만 보기
     python tools/teach_pose.py scan --iface can_follower              # configs/workcell.yaml 에 저장
@@ -22,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from aple.config import load_config, set_config_value  # noqa: E402
 
-POSES = ("home", "scan")
+POSES = ("home", "scan", "hold", "hover_UPPER", "hover_MIDDLE", "hover_REJECT")
 
 
 def read_joints(cfg: dict, iface: str | None) -> tuple[float, ...]:

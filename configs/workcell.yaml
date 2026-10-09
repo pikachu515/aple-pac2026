@@ -23,6 +23,11 @@ workcell:
   # 이 한 줄만 바꾼다: {UPPER: right, MIDDLE: left}. 그 밖의 키(색 범위·크기·max_yaw_deg 등) 기본값은 코드 _DEFAULTS
   auto_detect: {enabled: true, assign: {UPPER: left, MIDDLE: right}, flat_zone: REJECT}   # [실측 10/9 최종 배치]
   placement: {max_drop_m: 0.03, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near}
-  poses:                        # 현장에서 텔레오퍼레이션으로 자세를 잡고 tools/teach_pose.py home|scan 으로 저장
+  poses:                        # 현장에서 텔레오퍼레이션으로 자세를 잡고 tools/teach_pose.py <이름> 으로 저장
     home_joint_rad: [0.0, 0.0, 0.0, 0.0, 0.3971, 0.0] # [제안 10/9 — Studio 파킹 자세(INITIALIZE_POSITION), 접힌 자세라 탑뷰를 가리지 않음 — 역할 B 확인]
     scan_joint_rad: [0.0, 0.0, 0.0, 0.0, 0.3971, 0.0] # [제안 10/9 — Studio 파킹 자세(INITIALIZE_POSITION), 접힌 자세라 탑뷰를 가리지 않음 — 역할 B 확인]
+    # 스크립트 + ACT (10/10): ACT ① 이 사과를 들고 멈추는 자세 → 스크립트가 등급 상자 위로 → ACT ② 가 아래 빈 칸에 놓는다
+    hold_joint_rad: [-0.06135, 1.44025, -1.91552, -0.00543, 0.5843, -0.11228] # [실측 10/10] ACT ① 끝 = 들고 있는 자세
+    hover_UPPER_joint_rad: [-0.66726, 1.54202, -1.42953, 0.03239, 0.6963, -0.2185] # [실측 10/10] 왼쪽 상자(UPPER) 위 — ACT ② 출발 자세
+    hover_MIDDLE_joint_rad: [0.51746, 1.46976, -1.42953, 0.34095, 0.7888, -0.42141] # [실측 10/10] 오른쪽 상자(MIDDLE) 위
+    hover_REJECT_joint_rad: [-0.10315, 0.69822, -0.72862, 0.08453, 0.92256, -0.09205] # [실측 10/10] 리젝트 종이 위

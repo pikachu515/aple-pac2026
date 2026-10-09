@@ -116,8 +116,9 @@ class PiperTrajectoryMotionAdapter:
             if (isinstance(self._empty_speed_scale, bool)
                     or not isinstance(self._empty_speed_scale, (int, float))
                     or not math.isfinite(self._empty_speed_scale)
-                    or not float(safety['speed_scale_max']) <= self._empty_speed_scale <= 1):
-                raise ValueError('empty_speed_scale must be between speed_scale_max and 1')
+                    or not 0 < self._empty_speed_scale <= 1):
+                # 10/10 현장: 빈손 이동을 일반 속도(speed_scale_max)보다 느리게 두는 것도 허용한다 — 느린 쪽은 더 안전하다
+                raise ValueError('empty_speed_scale must be in (0, 1]')
         limits = safety.get("joint_limits_rad")
         if limits is None:
             raise ValueError("safety.joint_limits_rad must be measured before scripted motion")

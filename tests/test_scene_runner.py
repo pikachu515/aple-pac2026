@@ -4,6 +4,7 @@ M1 인식(#13)은 아직 main 에 없으므로 검출은 inspection.standalone(�
 합성 정답으로 대신한다. 로봇은 역할 B 의 RecordingMotionAdapter.
 """
 
+import copy
 import csv
 import math
 from dataclasses import replace
@@ -152,6 +153,10 @@ def test_cycle_reservations_are_released_only_without_execution(config, dry_run)
 def test_damage_fields_follow_work_item_and_survive_csv(config, tmp_path, dry_run):
     """Verify the M5 → M4 → CSV contract with distinct planned/executed values."""
     from aple.schema import ExecResult, Phase
+
+    # 힘 기록은 힘 보정 모드에서만 남는다 (#37: fixed_effort 는 실제 파지 힘을 모르므로 NaN)
+    config = copy.deepcopy(config)
+    config["execution"]["gripper"]["control_mode"] = "calibrated_force"
 
     runner = runner_for(config, RecordingMotionAdapter())
     snap = Scene()()

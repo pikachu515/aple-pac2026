@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+
+from tests.conftest import pristine_copy
 import pytest
 
 from aple.config import CONFIG_DIR
@@ -227,8 +229,7 @@ def test_warnings_for_few_poses_and_small_rotation():
 def test_fit_command_saves_workcell(tmp_path):
     session_path = tmp_path / "handeye.json"
     he.save_session(session_path, synthetic_session(BOARD))
-    workcell = tmp_path / "workcell.yaml"
-    shutil.copy(CONFIG_DIR / "workcell.yaml", workcell)
+    workcell = pristine_copy("workcell.yaml", tmp_path / "workcell.yaml")   # 현장 실측값과 무관하게 보정 전에서
     T_bc, _ = he.main(["fit", "--session", str(session_path), "--save", str(workcell)])
     saved = load_T_base_camera(str(workcell))
     assert np.abs(saved - T_bc).max() < 1e-5
@@ -243,8 +244,7 @@ def test_fit_refuses_save_with_warnings(tmp_path):
     session["poses"] = session["poses"][:5]
     session_path = tmp_path / "handeye.json"
     he.save_session(session_path, session)
-    workcell = tmp_path / "workcell.yaml"
-    shutil.copy(CONFIG_DIR / "workcell.yaml", workcell)
+    workcell = pristine_copy("workcell.yaml", tmp_path / "workcell.yaml")   # 현장 실측값과 무관하게 보정 전에서
     with pytest.raises(SystemExit, match="경고"):
         he.main(["fit", "--session", str(session_path), "--save", str(workcell)])
     with pytest.raises(ValueError):

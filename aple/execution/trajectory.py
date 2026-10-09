@@ -217,17 +217,15 @@ class PiperKinematicsIKSolver:
         target[:3, 3] = pose.position_m
         target = target @ self.tcp_transform.inverse_matrix()
 
-        result = self._ik_function(target, np.asarray(seed, dtype=float))
-        if not isinstance(result, Mapping):
-            raise RuntimeError("Piper IK returned a non-mapping result")
-        if result.get("ok") is not True:
+        joints = self._solve_from(target, np.asarray(seed, dtype=float))
+        limits = getattr(self, "joint_limits_rad", None)
+        if joints is not None and limits is not None and not all(
+                lo <= v <= hi for v, (lo, hi) in zip(joints, limits)):
+            joints = None                               # 범위 밖 해 — 다른 시작 자세로 범위 안 해를 찾는다
+        if joints is None:
+            joints = self._solve_multi_seed(target, np.asarray(seed, dtype=float))
+        if joints is None:
             return None
-        if "q" not in result:
-            raise RuntimeError("Piper IK reported success without a joint solution")
-
-        joints = np.asarray(result["q"], dtype=float)
-        if joints.shape != (6,) or not np.isfinite(joints).all():
-            raise RuntimeError("Piper IK returned an invalid six-joint solution")
         return (
             float(joints[0]),
             float(joints[1]),
@@ -236,6 +234,49 @@ class PiperKinematicsIKSolver:
             float(joints[4]),
             float(joints[5]),
         )
+
+    #: 처음 시드에서 못 풀면 시드 은행에서 목표와 가까운 자세로 다시 푼다. Piper 수치 IK 는 시드에 크게 좌우된다 —
+    #: 10/9 실기: 접힌 scan 자세에서 출발하면 트레이 위 하향 파지를 전부 IK_FAIL 로 냈다 (정답 근처 시드면 모두 풀림)
+    SEED_TRIES = 40
+
+    def _solve_from(self, target: np.ndarray, seed: np.ndarray):
+        result = self._ik_function(target, seed)
+        if not isinstance(result, Mapping):
+            raise RuntimeError("Piper IK returned a non-mapping result")
+        if result.get("ok") is not True:
+            return None
+        if "q" not in result:
+            raise RuntimeError("Piper IK reported success without a joint solution")
+        joints = np.asarray(result["q"], dtype=float)
+        if joints.shape != (6,) or not np.isfinite(joints).all():
+            raise RuntimeError("Piper IK returned an invalid six-joint solution")
+        return joints
+
+    def _solve_multi_seed(self, target: np.ndarray, seed: np.ndarray):
+        """시드 은행(관절 범위 안 무작위 자세의 플랜지 자세)에서 목표와 가까운 자세들을 시작점으로 다시 푼다.
+
+        처음 시드에 가장 가까운 해를 고른다. joint_limits_rad 가 있으면 그 안의 해만 받는다."""
+        bank = getattr(self, "seed_bank", None)
+        if bank is None:
+            return None
+        Q, P, Z, X = bank
+        dist = np.linalg.norm(P - target[:3, 3], axis=1)
+        ang = np.arccos(np.clip(Z @ target[:3, 2], -1.0, 1.0)) + 0.5 * np.arccos(np.clip(X @ target[:3, 0], -1.0, 1.0))
+        order = np.argsort(dist / 0.05 + ang / math.radians(20.0))[: self.SEED_TRIES]
+        limits = getattr(self, "joint_limits_rad", None)
+        best, best_cost = None, math.inf
+        for i in order:
+            joints = self._solve_from(target, Q[i])
+            if joints is None:
+                continue
+            if limits is not None and not all(lo <= v <= hi for v, (lo, hi) in zip(joints, limits)):
+                continue
+            cost = float(np.sum((joints - seed) ** 2))
+            if cost < best_cost:
+                best, best_cost = joints, cost
+            if cost < 0.5:                                  # 처음 시드에 충분히 가까운 해면 바로 끝
+                break
+        return best
 
     @staticmethod
     def _load_ik_function() -> PiperIKFunction:
@@ -335,6 +376,19 @@ def _rotation_quaternion(R: np.ndarray) -> tuple[float, float, float, float]:
     return tuple(float(v) for v in q)
 
 
+def _seed_bank(module, geometry, limits, count: int = 20000, seed: int = 0):
+    """관절 범위 안 무작위 자세 → (관절, 플랜지 위치, 플랜지 z축, x축). IK 시작점 후보 (한 번만 계산)."""
+    if not hasattr(module, "link_transforms"):
+        return None
+    lo_hi = np.asarray(limits if limits is not None else [(-math.pi, math.pi)] * 6, dtype=float)
+    Q = np.random.default_rng(seed).uniform(lo_hi[:, 0], lo_hi[:, 1], size=(count, 6))
+    try:
+        T = np.asarray(module.link_transforms(Q, geometry), dtype=float)[:, geometry.tip_index]
+    except Exception:                                   # 시험용 가짜 기구학 등 — 은행 없이 동작
+        return None
+    return Q, T[:, :3, 3], T[:, :3, 2], T[:, :3, 0]
+
+
 def build_piper_kinematics(cfg: dict, *, kinematics_module=None):
     """Create IK and a shared FK callable with one measured offset and geometry.
 
@@ -349,6 +403,9 @@ def build_piper_kinematics(cfg: dict, *, kinematics_module=None):
     ik = PiperKinematicsIKSolver(
         lambda target, seed: module.ik(target, seed, geom=geometry), tcp_transform=transform,
     )
+    limits = cfg.get("safety", {}).get("joint_limits_rad")
+    ik.joint_limits_rad = None if limits is None else [tuple(map(float, pair)) for pair in limits]
+    ik.seed_bank = _seed_bank(module, geometry, ik.joint_limits_rad)
     fk = PiperKinematicsFKProvider(
         transform, link_transforms=lambda q: module.link_transforms(q, geometry),
         tip_index=geometry.tip_index,

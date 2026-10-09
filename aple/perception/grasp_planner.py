@@ -15,6 +15,12 @@
 - grasp_pose.orientation = Rz(yaw) · R_down. R_down 은 TCP 가 아래를 보는 자세 (tool_down_rpy_deg, 기본 [180, 0, 0])
   → 역할 B IK 가 기대하는 TCP 축 규약과 같은지 현장 전에 확인한다 (configs/grasp_planner.yaml)
 - approach_vector = (0, 0, 1): 집기 전 자세 = 집는 자세 + approach_height_m 위
+
+먼 사과는 기울여 잡는다 (10/9 실기: 수직 파지는 베이스에서 수평 약 0.56 m 까지만 닿는다)
+- 베이스에서 수평 거리 d 가 tilt_start_m 을 넘으면 그리퍼 축을 바깥(베이스 반대쪽)으로 기울인다.
+  기울기 = max_tilt_deg · (d − tilt_start_m) / (tilt_full_m − tilt_start_m), max_tilt_deg 에서 멈춘다
+- 기울 때 핑거는 접선 방향(기울기 축)으로 닫는다 — 두 핑거가 사과 양옆을 같은 높이에서 잡는다
+- approach_vector 는 그리퍼 축을 따라 위로 (집기 전 자세도 같은 축 위)
 """
 
 from __future__ import annotations
@@ -37,7 +43,27 @@ _DEFAULTS = {
     "approach_height_m": 0.08,
     "tool_down_rpy_deg": [180.0, 0.0, 0.0],
     "max_clearance_m": 0.2,
+    "tilt_start_m": None,           # null = 기울이지 않는다 (항상 수직)
+    "tilt_full_m": 0.62,
+    "max_tilt_deg": 25.0,
 }
+
+
+def tilt_for(center_xy, p: dict) -> float:
+    """베이스에서 수평 거리에 따른 그리퍼 기울기 (rad, 바깥쪽)."""
+    start = p.get("tilt_start_m")
+    if start is None:
+        return 0.0
+    d = math.hypot(float(center_xy[0]), float(center_xy[1]))
+    full = float(p["tilt_full_m"])
+    frac = 0.0 if d <= start else min(1.0, (d - start) / max(full - start, 1e-6))
+    return math.radians(float(p["max_tilt_deg"])) * frac
+
+
+def _rot_axis(axis, angle: float) -> np.ndarray:
+    k = np.asarray(axis, float) / np.linalg.norm(axis)
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + math.sin(angle) * K + (1 - math.cos(angle)) * K @ K
 
 
 @dataclass(frozen=True)
@@ -77,7 +103,13 @@ def plan_grasps(apples: list[AppleState], cfg: dict) -> list[GraspCandidate]:
         reach = r + p["open_margin_m"] + p["finger_thickness_m"] / 2
         others = [(np.asarray(b.center_m[:2]), b.diameter_m / 2) for b in apples if b is not a]
         best_yaw, best_clear = 0.0, -math.inf
-        for yaw in yaws:
+        tilt = tilt_for(c, p)
+        phi = math.atan2(float(c[1]), float(c[0]))
+        if tilt > 0:                                    # 기울이면 접선 방향으로만 닫는다
+            yaws_here = np.array([(phi + math.pi / 2) % math.pi])
+        else:
+            yaws_here = yaws
+        for yaw in yaws_here:
             u = np.array([math.cos(yaw), math.sin(yaw)])
             clear = cap
             for s in (1.0, -1.0):
@@ -91,13 +123,33 @@ def plan_grasps(apples: list[AppleState], cfg: dict) -> list[GraspCandidate]:
             if clear > best_clear + 1e-9:                    # 동률이면 먼저 본 yaw (0° 쪽) 유지
                 best_yaw, best_clear = float(yaw), clear
         R = rpy_to_matrix(0.0, 0.0, best_yaw) @ R_down
+        approach = (0.0, 0.0, 1.0)
+        if tilt > 0:
+            # 축 k = 반지름 방향에 수직(수평). −tilt 회전이면 그리퍼 z(아래)가 베이스 반대쪽으로 기운다
+            R = _rot_axis((-math.sin(phi), math.cos(phi), 0.0), -tilt) @ R
+            approach = tuple(float(v) for v in -R[:, 2])  # 그리퍼 축을 따라 사과에서 멀어지는 쪽
         pose = Pose3D((float(c[0]), float(c[1]), float(a.center_m[2])), quat_xyzw(R))
         reported = float(min(max(best_clear, 0.0), cap))
         out.append(GraspCandidate(
             scene_id=a.scene_id, apple_id=a.apple_id, grasp_pose=pose, grasp_yaw_rad=best_yaw,
-            approach_vector=(0.0, 0.0, 1.0), approach_height_m=float(p["approach_height_m"]),
+            approach_vector=approach, approach_height_m=float(p["approach_height_m"]),
             min_clearance_m=reported, collision_free=bool(best_clear >= p["min_clearance_m"]), score=reported))
     return out
+
+
+def tool_orientation_at(center_xy, cfg: dict, yaw_rad: float | None = None) -> tuple[float, float, float, float]:
+    """그 위치에서 쓸 TCP 자세 (x, y, z, w) — plan_grasps 와 같은 규칙 (먼 곳은 바깥으로 기울이고 접선으로 닫는다).
+
+    놓을 때 쓴다: 사과는 구라서 놓는 위치에 맞춰 그리퍼 방향을 다시 정해도 된다. yaw_rad = 기울이지 않을 때 쓸 yaw."""
+    p = grasp_params(cfg)
+    R_down = rpy_to_matrix(*np.deg2rad(p["tool_down_rpy_deg"]))
+    tilt = tilt_for(center_xy, p)
+    phi = math.atan2(float(center_xy[1]), float(center_xy[0]))
+    yaw = (phi + math.pi / 2) % math.pi if tilt > 0 else float(yaw_rad or 0.0)
+    R = rpy_to_matrix(0.0, 0.0, yaw) @ R_down
+    if tilt > 0:
+        R = _rot_axis((-math.sin(phi), math.cos(phi), 0.0), -tilt) @ R
+    return quat_xyzw(R)
 
 
 def quat_xyzw(R: np.ndarray) -> tuple[float, float, float, float]:

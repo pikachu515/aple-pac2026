@@ -250,7 +250,7 @@ class MotionExecutor:
             raise ValueError("plan.planned_drop_m exceeds workcell.placement.max_drop_m")
 
         effort = self._checked_effort(profile)
-        targets = build_targets(apple, profile, candidate, plan)
+        targets = build_targets(apple, profile, candidate, plan, self._place_orientation(plan))
         if backend == "act":
             task_text = execution_cfg["act"]["task_text"]
             if not isinstance(task_text, str) or not task_text.strip():
@@ -453,7 +453,7 @@ class MotionExecutor:
             raise ValueError("workcell.placement.max_drop_m must be finite and non-negative")
         if plan.planned_drop_m > max_drop_m:
             raise ValueError("plan.planned_drop_m exceeds workcell.placement.max_drop_m")
-        targets = build_place_targets(apple_in_tcp, plan)
+        targets = build_place_targets(apple_in_tcp, plan, self._place_orientation(plan))
         backend, task_text, timeout_s = self._backend_options(backend)
         effort = self._checked_effort(profile)
         transit_speed = self._speed_scale("speed_scale_max")
@@ -676,6 +676,13 @@ class MotionExecutor:
             raise ValueError("apple, profile, and placement must share an apple_id")
         if not math.isfinite(apple.diameter_m) or apple.diameter_m <= 0:
             raise ValueError("apple.diameter_m must be finite and positive")
+
+    def _place_orientation(self, plan):
+        """먼 곳 기울이기(grasp_planner.tilt_start_m)가 켜져 있으면 놓는 위치에 맞춘 TCP 자세, 아니면 None(집을 때 자세 유지)."""
+        if (self.cfg.get("grasp_planner") or {}).get("tilt_start_m") is None:
+            return None
+        from aple.perception.grasp_planner import tool_orientation_at
+        return tool_orientation_at(plan.place_center_m[:2], self.cfg)
 
     def _backend_options(self, backend: str | None) -> tuple[str, str, float]:
         execution_cfg = self.cfg["execution"]

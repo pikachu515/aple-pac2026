@@ -9,3 +9,7 @@ grasp_planner:
   approach_height_m: 0.08         # 집기 전 자세 = 집는 자세 위 이 높이
   tool_down_rpy_deg: [180, 0, 0]  # [임시] TCP 가 아래를 보는 자세 (base_link RPY). 역할 B IK 규약과 맞춘다
   max_clearance_m: 0.2
+  # 먼 사과는 그리퍼를 바깥쪽으로 기울여 잡는다 (10/9 실기: 수직 파지는 베이스에서 수평 약 0.56 m 까지)
+  tilt_start_m: 0.30              # [임시 10/9] 이 거리부터 기울이기 시작 (null = 항상 수직). 18 cm 그리퍼 수직 파지는 수평 ~0.31 m 까지
+  tilt_full_m: 0.60               # [임시 10/9] 이 거리에서 max_tilt_deg (20° ≈ 0.53 m, 30° ≈ 0.60 m 까지 닿음)
+  max_tilt_deg: 32                # [임시 10/9]

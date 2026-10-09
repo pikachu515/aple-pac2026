@@ -52,6 +52,7 @@ def build_targets(
     profile: GraspProfile,
     candidate: GraspPoseCandidate,
     placement: PlacementPlan,
+    place_tcp_orientation_xyzw: tuple[float, float, float, float] | None = None,
 ) -> MotionTargets:
     """Derive base_link TCP targets; the spherical apple uses an identity object frame."""
     if not placement.feasible:
@@ -61,6 +62,7 @@ def build_targets(
     place_targets = build_place_targets(
         pick_targets.apple_in_tcp,
         placement,
+        place_tcp_orientation_xyzw,
     )
     return MotionTargets(
         pick_pose=pick_targets.pick_pose,
@@ -126,8 +128,12 @@ def build_pick_targets(
 def build_place_targets(
     apple_in_tcp: Pose3D,
     placement: PlacementPlan,
+    tcp_orientation_xyzw: tuple[float, float, float, float] | None = None,
 ) -> PlaceTargets:
-    """Build placement TCP targets from the transform measured after picking."""
+    """Build placement TCP targets from the transform measured after picking.
+
+    tcp_orientation_xyzw 를 주면 놓을 때 TCP 가 그 자세가 되도록 사과 자세를 고른다 (구라서 사과 방향은 자유).
+    10/9: 18 cm 그리퍼로는 먼 상자 칸을 집을 때 자세 그대로 놓을 수 없다 — 놓는 위치에 맞춰 기울인다."""
     if not placement.feasible:
         raise ValueError("cannot build place targets for an infeasible placement")
     _validate_pose(apple_in_tcp, "apple_in_tcp")
@@ -138,9 +144,13 @@ def build_place_targets(
     if placement.hover_z_m < placement.release_z_m:
         raise ValueError("placement hover_z_m must not be below release_z_m")
 
+    apple_orientation = (0.0, 0.0, 0.0, 1.0)
+    if tcp_orientation_xyzw is not None:
+        # TCP 자세 = 사과 자세 · inverse(apple_in_tcp) 의 회전 → 사과 자세 = 원하는 TCP 자세 · apple_in_tcp 회전
+        apple_orientation = _multiply(tuple(tcp_orientation_xyzw), apple_in_tcp.orientation_xyzw)
     place_apple_pose = Pose3D(
         placement.place_center_m,
-        (0.0, 0.0, 0.0, 1.0),
+        apple_orientation,
     )
     place_pose = compose(place_apple_pose, inverse(apple_in_tcp))
     hover_pose = Pose3D(

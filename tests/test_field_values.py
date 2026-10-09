@@ -5,6 +5,7 @@ import shutil
 import pytest
 
 from aple.config import CONFIG_DIR, load_config
+from tests.conftest import reset_field_values
 from tools import field_values as fv
 
 
@@ -12,6 +13,7 @@ from tools import field_values as fv
 def cfgdir(tmp_path):
     d = tmp_path / "configs"
     shutil.copytree(CONFIG_DIR, d)
+    reset_field_values(d)                                                 # 현장에서 채운 값과 무관하게
     return d, tmp_path / "logs" / "field_changes.csv"
 
 

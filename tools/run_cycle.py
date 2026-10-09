@@ -114,12 +114,27 @@ def missing_for_execution(cfg: dict) -> list[str]:
 
 
 def limit_items(runner, n: int):
-    """runner.plan 이 집을 사과(PICK_*)를 앞에서 n 개만 남기게 감싼다 — 나머지(SKIP·DEFER 포함)는 이번 장면에서 뺀다."""
+    """장면마다 집을 사과 수 상한 (첫 실기 1개).
+
+    실기(MissionController): 사과 하나씩 집고 다시 찍어 재계획하므로 계획을 자르지 않는다 —
+    n 개를 놓은 뒤 미션을 정상 종료(FINISHED)한다. 드라이런(SceneRunner): 집을 사과를 앞에서 n 개만 남긴다.
+    """
     from dataclasses import replace
 
     from aple.schema import TaskAction
     if n <= 0:
         raise SystemExit("--max-items 는 1 이상")
+    if hasattr(runner, "placed") and hasattr(runner, "_emit"):
+        emit = runner._emit
+
+        def emit_and_stop(kind, **details):
+            emit(kind, **details)
+            if kind == "PLACED" and len(runner.placed) >= n and not runner.halted:
+                runner.halted, runner.state = True, "FINISHED"     # 재계획 뒤 루프를 끝낸다 (정지 경보 아님)
+                runner.halt_reason = f"--max-items {n}개 적재 완료 — 정상 종료 (다음 실행에서 이어서)"
+                emit("MAX_ITEMS_REACHED", placed=len(runner.placed))
+        runner._emit = emit_and_stop
+        return runner
     plan = runner.plan
 
     def limited(snap):

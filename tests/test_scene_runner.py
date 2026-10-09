@@ -380,7 +380,7 @@ def test_run_cycle_refuses_execution_until_parts_exist(config, monkeypatch, caps
         run_cycle.main(["--live", "--execute"], make_live_camera=lambda c: Scene())
     out = capsys.readouterr().out
     assert e.value.code == 2
-    assert "T_base_camera" in out and "tcp_offset_m" in out and "SegmentValidator" in out
+    assert "T_base_camera" in out and "tcp_offset_m" in out and "safety.segment_validation" in out
 
 
 def test_run_cycle_live_plans_without_moving(config, monkeypatch, capsys):

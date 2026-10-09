@@ -150,6 +150,14 @@ class PlacementPlanner:
     def release(self, box_id: int, cell_index: int) -> None:
         self.reserved.discard((box_id, cell_index))
 
+    def reserve(self, plan: PlacementPlan) -> None:
+        if not plan.feasible or plan.cell_index < 0:
+            raise ValueError("cannot reserve an infeasible placement")
+        key = (int(plan.box_id), plan.cell_index)
+        if key in self.reserved:
+            raise ValueError("placement cell is already reserved by an outstanding execution")
+        self.reserved.add(key)
+
     def verify(
         self,
         plan: PlacementPlan,
@@ -164,6 +172,12 @@ class PlacementPlanner:
             return invalid
         if before.box_id != plan.box_id or after.box_id != plan.box_id:
             raise ValueError("before and after occupancy must match the planned box_id")
+        if after.scene_id <= before.scene_id:
+            raise ValueError("placement verification requires a newer measured scene")
+        if (before.rows, before.cols, before.origin_m, before.cell_pitch_m) != (
+            after.rows, after.cols, after.origin_m, after.cell_pitch_m
+        ):
+            return invalid
         if len(before.heights_m) != len(after.heights_m) or cell >= len(after.heights_m):
             return invalid
         tol_m = float(self.cfg["execution"]["placement_verify"]["height_tol_m"])
@@ -174,9 +188,10 @@ class PlacementPlanner:
             return invalid
         delta = deltas[cell]
         error = delta - apple.diameter_m
-        success = abs(error) <= tol_m
+        success = bool(after.occupied[cell]) and abs(error) <= tol_m
         others_changed = any(d > tol_m for i, d in enumerate(deltas) if i != cell)
         rolled_out = (not success) and abs(delta) <= tol_m and others_changed
         if success or rolled_out:
             self.release(box_id, cell)
+        self._last_valid_boxes[box_id] = deepcopy(after)
         return PlacementVerification(box_id, cell, True, success, rolled_out, delta, error)

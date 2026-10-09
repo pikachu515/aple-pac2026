@@ -89,6 +89,7 @@ def demo_scene(seed: int = 0) -> tuple[SceneSnapshot, dict, dict, list, np.ndarr
 
     # ② 트레이 위 사과 5개 (두 개는 맞닿음) + 상자 UPPER 에 이미 2개, MIDDLE 은 빈 상자
     cfg = copy.deepcopy(load_config())
+    cfg['piper_web']['gripper_width_range_m'] = [.02, .12]  # Synthetic demo only.
     cfg["workcell"]["T_base_camera"] = T_fit.tolist()
     cfg["workcell"]["tray"].update(center_m=[0.30, -0.01, 0.0], size_m=[0.28, 0.28])
     upper, middle = (0.21, 0.16, 0.01), (0.21, -0.31, 0.01)

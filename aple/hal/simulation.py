@@ -41,6 +41,8 @@ class KinematicWorld:
     def __init__(self, cfg, fk, validator):
         self.cfg, self.fk, self.validator = cfg, fk, validator
         self.settings = cfg['simulation']
+        if self.settings.get('color_pattern_frame', 'world') not in ('world', 'camera_tangent'):
+            raise ValueError('simulation.color_pattern_frame must be world or camera_tangent')
         self.q = JointTrajectoryPlanner._validate_joints(self.settings['initial_joint_rad'], 'initial_joint_rad')
         self.velocity = JointTrajectoryPlanner._positive_finite(self.settings['joint_velocity_rad_s'], 'joint_velocity_rad_s')
         self.tolerance = JointTrajectoryPlanner._positive_finite(self.settings['grasp_tolerance_m'], 'grasp_tolerance_m')
@@ -78,6 +80,9 @@ class KinematicWorld:
 
     def gripper_width_m(self):
         return self.width
+
+    def confirm_holding(self, apple, apple_in_tcp, *, timeout_s):
+        return self.held is not None
 
     def move_joint_goal(self, position_rad, *, speed_scale, timeout_s):
         goal = JointTrajectoryPlanner._validate_joints(position_rad, 'position_rad')
@@ -168,7 +173,17 @@ class KinematicWorld:
             hit_depth = (-bb - np.sqrt(np.maximum(discriminant, 0))) / aa
             mask = (discriminant >= 0) & (hit_depth > 0) & (hit_depth < depth)
             normal = (origin + hit_depth[..., None] * directions - center) / apple['radius_m']
-            red = normal[..., 1] > 1 - 2 * apple['red_fraction']
+            if self.settings.get('color_pattern_frame') == 'camera_tangent':
+                view = center - origin
+                view /= np.linalg.norm(view)
+                axis = np.array([0., 1., 0.])
+                if abs(np.dot(axis, view)) > .99:
+                    axis = np.array([1., 0., 0.])
+                tangent = axis - view * np.dot(axis, view)
+                tangent /= np.linalg.norm(tangent)
+                red = normal @ tangent > 1 - 2 * apple['red_fraction']
+            else:
+                red = normal[..., 1] > 1 - 2 * apple['red_fraction']
             color[mask & red] = (38, 30, 175)
             color[mask & ~red] = (75, 190, 205)
             depth[mask] = hit_depth[mask]

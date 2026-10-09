@@ -27,6 +27,7 @@ def apple(i, x, y, r=0.037, occluded=False):
 @pytest.fixture
 def cfg():
     c = copy.deepcopy(load_config())
+    c['piper_web']['gripper_width_range_m'] = [.02, .12]
     c["workcell"]["T_base_camera"] = camera_looking_down().tolist()
     return c
 
@@ -94,11 +95,13 @@ ENC = DepthEncoding(150.0, 1200.0)
 
 def fake_reader(frames):
     """[(color, depth_m), ...] → read_pair 처럼 한 쌍씩. 같은 프레임을 두 번 돌려 중복 무시도 시험한다."""
-    seq = []
-    for i, (color, depth) in enumerate(frames):
-        pair = (color, piper_encode(depth, ENC), (i + 1) * 33_000_000)
-        seq += [pair, pair]
-    it = iter(seq)
+    import time
+    def seq():
+        for color, depth in frames:
+            pair = (color, piper_encode(depth, ENC), time.time_ns())
+            yield pair
+            yield pair
+    it = iter(seq())
     return lambda: next(it, None)
 
 

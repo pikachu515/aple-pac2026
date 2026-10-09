@@ -1,3 +1,4 @@
+from dataclasses import replace
 """Role B planning and fixed-effort regression tests."""
 
 from dataclasses import dataclass
@@ -73,6 +74,7 @@ def grasp_candidate(apple_id=1, *, scene_id=1, collision_free=True):
 @pytest.fixture
 def cfg():
     config = load_config()
+    config['piper_web']['gripper_width_range_m'] = [.02, .12]
     config["execution"]["gripper"]["control_mode"] = "calibrated_force"
     config["safety"]["gripper_effort_max"] = 1000
     config["size_bins"]["force"]["mu"] = 0.5
@@ -98,7 +100,9 @@ def test_grasp_profile_uses_size_bin_and_calibrated_force(cfg):
 
 
 def test_fixed_effort_profile_does_not_require_force_sensor_calibration():
-    result = select(apple(), load_config())
+    config = load_config()
+    config['piper_web']['gripper_width_range_m'] = [.02, .12]
+    result = select(apple(), config)
 
     assert result.grasp_force_n == 0
     assert result.effort == 1000
@@ -557,7 +561,7 @@ def test_verify_placement_success_releases_reservation(cfg):
     planner, plan = _planned(cfg)
     heights = [0.0] * 3
     heights[plan.cell_index] = 0.078
-    result = planner.verify(plan, apple(), _box([0.0] * 3), _box(heights))
+    result = planner.verify(plan, apple(), _box([0.0] * 3), replace(_box(heights), scene_id=2, occupied=[h > 0 for h in heights]))
     assert result.success and not result.rolled_out and result.verified
     assert not planner.reserved
 
@@ -566,7 +570,7 @@ def test_verify_placement_detects_roll_out(cfg):
     planner, plan = _planned(cfg)
     heights = [0.0] * 3
     heights[(plan.cell_index + 1) % 3] = 0.078
-    result = planner.verify(plan, apple(), _box([0.0] * 3), _box(heights))
+    result = planner.verify(plan, apple(), _box([0.0] * 3), replace(_box(heights), scene_id=2, occupied=[h > 0 for h in heights]))
     assert result.rolled_out and not result.success
     assert not planner.reserved
 

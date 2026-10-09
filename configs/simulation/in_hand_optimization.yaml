@@ -1,0 +1,13 @@
+# Optional offline simulation candidate. Never copy into real execution configs.
+optimization:
+  # Active plan: restore the original local-Z tool rotation, not vertical pitch.
+  inspection_rotation_mode: tool_roll
+  # Optical ring diameters come from simulation/gripper_physics.yaml.
+  choose_transfer_route: true
+  native_slip_fk: true
+  exact_final_descent: true
+  inspection_physics_settle_s: 0.06
+  # Keep loaded/rotation velocities and all four inspection views unchanged.
+  empty_joint_velocity_rad_s: 1.5
+  # Trial value, not a measured damage-safe speed or an optimum.
+  landing_speed_scale: 0.2

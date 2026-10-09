@@ -8,6 +8,7 @@ live_camera:
   frames: 3                       # 스냅샷 1장 = 연속 프레임 깊이 중앙값 (팔 정지 상태에서 잡음·결측 감소)
   max_skew_ms: 50                 # 컬러·깊이 프레임 시각 차 허용
   timeout_s: 2.0
+  max_frame_age_s: 1.0           # 오래된 공유 메모리 프레임 거부. 촬영 요청 이후 노출된 프레임만 사용
   # 깊이 거리 보정 (aple/hal/depth_correction.py) — 카메라마다 다르다. 실제 거리 = gain / (1/깊이 − offset_per_m)
   # 10/7 D435i 243122071248: 0.74 m 에서 깊이가 45% 짧았다 → gain 1.038, offset_per_m 1.052 (카드 3거리, 오차 1.2% 이내)
   # 10/8 이 카메라는 Tare 로 재보정해 카메라에 저장했다 (tools/rs_calibrate.py, 카드 오차 +0.8~1.7%) → 이 카메라는 1, 0 그대로

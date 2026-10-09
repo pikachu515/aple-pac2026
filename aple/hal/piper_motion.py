@@ -1,13 +1,14 @@
 """Scripted Cartesian motion over an injected, speed-aware Piper transport.
 
-The transport boundary is intentional: Piper Web v0.5.9's public joint jog
-does not accept per-goal speed, so that API cannot safely implement Phase B.
+The Studio transport schedules timed joint setpoints under measured limits and
+monitors feedback; the underlying jog API itself has no per-goal speed field.
 """
 
 from __future__ import annotations
 
 import math
 import time
+from functools import wraps
 from typing import Callable, Protocol
 
 import numpy as np
@@ -17,6 +18,7 @@ from aple.execution.goal_builder import (
     PickTargets,
     PlaceTargets,
     Pose3D,
+    relative_pose,
 )
 from aple.execution.inspect_skill import InspectionPlan
 from aple.execution.motion_executor import (
@@ -70,6 +72,21 @@ class PiperMotionTransport(Protocol):
     ) -> InHandCapture | None: ...
 
 
+def _invalidate_load_on_failure(method):
+    """A failed operation must never leave a stale empty-gripper speed permit."""
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        try:
+            result = method(self, *args, **kwargs)
+        except Exception:
+            self._load_state = 'unknown'
+            raise
+        if result is False or getattr(result, 'success', True) is False:
+            self._load_state = 'unknown'
+        return result
+    return guarded
+
+
 class PiperTrajectoryMotionAdapter:
     """Implement the motion-executor contract using IK and checked joint steps.
 
@@ -87,8 +104,19 @@ class PiperTrajectoryMotionAdapter:
         from aple.execution.gripper_geometry import apply_attachment_geometry
         cfg = apply_attachment_geometry(cfg)
         self._transport = transport
+        self._segment_validator = segment_validator
         self._cfg = cfg
         safety = cfg["safety"]
+        # Opening/release acknowledgment grants empty state; startup and failures
+        # remain unknown. No width-only inference from a failed grasp is allowed.
+        self._load_state = 'unknown'
+        self._empty_speed_scale = cfg['execution'].get('motion', {}).get('empty_speed_scale')
+        if self._empty_speed_scale is not None:
+            if (isinstance(self._empty_speed_scale, bool)
+                    or not isinstance(self._empty_speed_scale, (int, float))
+                    or not math.isfinite(self._empty_speed_scale)
+                    or not float(safety['speed_scale_max']) <= self._empty_speed_scale <= 1):
+                raise ValueError('empty_speed_scale must be between speed_scale_max and 1')
         limits = safety.get("joint_limits_rad")
         if limits is None:
             raise ValueError("safety.joint_limits_rad must be measured before scripted motion")
@@ -108,11 +136,20 @@ class PiperTrajectoryMotionAdapter:
             max_joint_step_rad=step,
         )
 
+    def _empty_transit_speed(self, requested):
+        # Explicitly slow recovery/contact moves retain their requested speed.
+        limit = float(self._cfg['safety']['speed_scale_max'])
+        if (self._load_state == 'empty' and self._empty_speed_scale is not None
+                and requested >= limit):
+            return float(self._empty_speed_scale)
+        return min(requested, limit)
+
     def gripper_width_m(self) -> float | None:
         """Finger width if the transport can read it; None means unknown, not lost."""
         reader = getattr(self._transport, "gripper_width_m", None)
         return None if reader is None else reader()
 
+    @_invalidate_load_on_failure
     def move_named(
         self,
         name: str,
@@ -128,15 +165,12 @@ class PiperTrajectoryMotionAdapter:
         # Named moves need the same bounds and collision checks as Cartesian moves.
         try:
             trajectory = self._planner.plan_joint_goal(joint_target_rad, current)
-            for point in trajectory.points_rad:
-                if not self._transport.move_joint_goal(
-                    point, speed_scale=speed_scale, timeout_s=self._remaining(deadline)
-                ):
-                    return False
+            self._send_trajectory(trajectory.points_rad, speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
         except (TrajectoryPlanningError, TimeoutError):
             return False
         return True
 
+    @_invalidate_load_on_failure
     def execute_phase_a(
         self,
         apple: AppleState,
@@ -164,28 +198,35 @@ class PiperTrajectoryMotionAdapter:
                 profile.open_width_m, effort, timeout_s=self._remaining(deadline)
             ):
                 return PhaseAResult(False, FailureCode.TIMEOUT, Phase.APPROACH, False, False)
-            self._move_poses(
-                (targets.pregrasp_pose, targets.pick_pose),
-                speed_scale=speed_scale,
-                deadline=deadline,
-            )
-            if not self._transport.set_gripper_width(
-                apple.diameter_m, effort, timeout_s=self._remaining(deadline)
-            ):
+            self._load_state = 'empty'
+            self._move_poses((targets.pregrasp_pose,),
+                speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
+            # Descent close to the fruit retains the normal approach speed.
+            self._move_poses((targets.pick_pose,), speed_scale=speed_scale, deadline=deadline)
+            self._load_state = 'unknown'
+            if not self._close_for_grasp(apple, profile, effort, deadline):
                 return PhaseAResult(False, FailureCode.TIMEOUT, Phase.GRASP, False, False)
-            holding = True
-            phase = Phase.TRANSIT
+            self._set_payload(targets.apple_in_tcp, apple, allow_support_contact=True)
+            phase = Phase.LIFT
             self._move_poses(
-                (targets.pregrasp_pose, targets.hover_pose),
+                (targets.pregrasp_pose,),
                 speed_scale=speed_scale,
                 deadline=deadline,
             )
+            holding = self._confirm_holding(apple, targets.apple_in_tcp, deadline)
+            if not holding:
+                return PhaseAResult(False, FailureCode.NOT_HOLDING, Phase.LIFT, False, False)
+            self._load_state = 'held'
+            self._set_payload(targets.apple_in_tcp, apple)
+            phase = Phase.TRANSIT
+            self._move_poses((targets.hover_pose,), speed_scale=speed_scale, deadline=deadline)
         except TrajectoryPlanningError as exc:
             return PhaseAResult(False, exc.failure_code, phase, holding, False)
         except TimeoutError:
             return PhaseAResult(False, FailureCode.TIMEOUT, phase, holding, False)
         return PhaseAResult(True, FailureCode.NONE, Phase.HOVER, True, True)
 
+    @_invalidate_load_on_failure
     def execute_pick(
         self,
         apple: AppleState,
@@ -214,26 +255,31 @@ class PiperTrajectoryMotionAdapter:
                 return PickPhaseResult(
                     False, FailureCode.TIMEOUT, Phase.APPROACH, False, False, None, None
                 )
-            self._move_poses(
-                (targets.pregrasp_pose, targets.pick_pose),
-                speed_scale=speed_scale,
-                deadline=deadline,
-            )
-            if not self._transport.set_gripper_width(
-                apple.diameter_m, effort, timeout_s=self._remaining(deadline)
-            ):
+            self._load_state = 'empty'
+            self._move_poses((targets.pregrasp_pose,),
+                speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
+            # Descent close to the fruit retains the normal approach speed.
+            self._move_poses((targets.pick_pose,), speed_scale=speed_scale, deadline=deadline)
+            self._load_state = 'unknown'
+            if not self._close_for_grasp(apple, profile, effort, deadline):
                 return PickPhaseResult(
                     False, FailureCode.TIMEOUT, Phase.GRASP, False, False, None, None
                 )
-            holding = True
             phase = Phase.LIFT
             grasp_pose = self._transport.tool_pose()
+            actual_offset = relative_pose(grasp_pose, Pose3D(apple.center_m, (0., 0., 0., 1.)))
+            self._set_payload(actual_offset, apple, allow_support_contact=True)
             self._move_poses(
                 (targets.pregrasp_pose,),
                 speed_scale=speed_scale,
                 deadline=deadline,
             )
             hover_pose = self._transport.tool_pose()
+            holding = self._confirm_holding(apple, actual_offset, deadline)
+            if not holding:
+                return PickPhaseResult(False, FailureCode.NOT_HOLDING, Phase.LIFT, False, False, grasp_pose, hover_pose)
+            self._load_state = 'held'
+            self._set_payload(actual_offset, apple)
         except TrajectoryPlanningError as exc:
             return PickPhaseResult(
                 False, exc.failure_code, phase, holding, False, None, None
@@ -246,6 +292,7 @@ class PiperTrajectoryMotionAdapter:
             True, FailureCode.NONE, Phase.HOVER, True, True, grasp_pose, hover_pose
         )
 
+    @_invalidate_load_on_failure
     def execute_place_phase_a(
         self,
         apple: AppleState,
@@ -278,6 +325,7 @@ class PiperTrajectoryMotionAdapter:
             raise ValueError("effort must be non-negative")
         return PhaseAResult(True, FailureCode.NONE, Phase.HOVER, True, True)
 
+    @_invalidate_load_on_failure
     def execute_phase_b(
         self,
         apple: AppleState,
@@ -298,7 +346,8 @@ class PiperTrajectoryMotionAdapter:
             try:
                 self._move_poses(
                     (step.pose,),
-                    speed_scale=step.speed_scale,
+                    speed_scale=self._empty_transit_speed(step.speed_scale)
+                        if phase == Phase.RELEASE else step.speed_scale,
                     deadline=deadline,
                 )
             except (TrajectoryPlanningError, TimeoutError):
@@ -315,10 +364,15 @@ class PiperTrajectoryMotionAdapter:
                     return PhaseBResult(False, Phase.RELEASE)
                 if not released:
                     return PhaseBResult(False, Phase.RELEASE)
+                self._load_state = 'empty'
+                clear_payload = getattr(self._segment_validator, "clear_payload", None)
+                if clear_payload is not None:
+                    clear_payload()
             if index == len(landing_plan.steps) - 1:
                 phase = Phase.RETREAT
         return PhaseBResult(True, Phase.RETREAT)
 
+    @_invalidate_load_on_failure
     def inspect_views(
         self,
         profile: GraspProfile,
@@ -450,14 +504,35 @@ class PiperTrajectoryMotionAdapter:
                 trajectory = self._planner.plan(
                     (ToolPose(waypoint.position_m, waypoint.orientation_xyzw),), current
                 )
-                for joints in trajectory.points_rad:
-                    if not self._transport.move_joint_goal(
-                        joints,
-                        speed_scale=speed_scale,
-                        timeout_s=self._remaining(deadline),
-                    ):
-                        raise TimeoutError("Piper joint goal did not reach its target")
-                    current = joints
+                self._send_trajectory(trajectory.points_rad, speed_scale=speed_scale, deadline=deadline)
+                current = self._transport.joint_state()
+
+    def _send_trajectory(self, points, *, speed_scale, deadline):
+        batch = getattr(self._transport, 'move_joint_trajectory', None)
+        if callable(batch):
+            if not batch(points, speed_scale=speed_scale, timeout_s=self._remaining(deadline)):
+                raise TimeoutError('Piper joint trajectory did not arrive')
+            return
+        for joints in points:
+            if not self._transport.move_joint_goal(joints, speed_scale=speed_scale,
+                                                 timeout_s=self._remaining(deadline)):
+                raise TimeoutError('Piper joint goal did not arrive')
+
+    def _close_for_grasp(self, apple, profile, effort, deadline):
+        close = getattr(self._transport, 'close_for_grasp', None)
+        if callable(close):
+            return close(apple, profile, effort, timeout_s=self._remaining(deadline))
+        return self._transport.set_gripper_width(apple.diameter_m, effort,
+                                                timeout_s=self._remaining(deadline))
+
+    def _confirm_holding(self, apple, apple_in_tcp, deadline):
+        confirm = getattr(self._transport, 'confirm_holding', None)
+        return callable(confirm) and confirm(apple, apple_in_tcp, timeout_s=self._remaining(deadline)) is True
+
+    def _set_payload(self, apple_in_tcp, apple, **kwargs):
+        setter = getattr(self._segment_validator, 'set_payload', None)
+        if callable(setter):
+            setter(apple_in_tcp, apple.diameter_m / 2, **kwargs)
 
     @staticmethod
     def _deadline(timeout_s: float) -> float:
@@ -486,6 +561,7 @@ def build_piper_motion_adapter(
     *,
     tool_pose_provider=None,
     in_hand_capture_provider=None,
+    holding_verifier=None,
 ) -> PiperTrajectoryMotionAdapter:
     """Assemble the scripted adapter on Piper Web with waypoint-subdivision slowdown."""
     from aple.hal.piper_studio import PiperStudioMotionTransport
@@ -502,10 +578,16 @@ def build_piper_motion_adapter(
         if tool_pose_provider.tcp_transform != ik_solver.tcp_transform:
             raise ValueError("Piper IK and FK must share the same measured TCP offset")
 
+    from aple.execution.timed_motion import MotionLimits
+    limits_cfg = cfg['execution'].get('motion')
+    limits = (MotionLimits.from_config(limits_cfg)
+              if limits_cfg and limits_cfg.get('velocity_limits_rad_s') is not None else None)
     transport = PiperStudioMotionTransport(
         studio,
         max_joint_step_rad=cfg["execution"]["trajectory"]["max_joint_step_rad"],
         tool_pose_provider=tool_pose_provider,
         in_hand_capture_provider=in_hand_capture_provider,
+        motion_limits=limits,
+        holding_verifier=holding_verifier,
     )
     return PiperTrajectoryMotionAdapter(transport, cfg, ik_solver, segment_validator)

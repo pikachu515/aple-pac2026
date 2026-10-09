@@ -23,6 +23,7 @@ def test_simulation_overlay_preserves_measured_configuration():
     assert cfg == before and cfg['workcell']['tcp_offset_m'] is None
     assert virtual['workcell']['tcp_offset_m'] == [0, 0, .16]
     assert not virtual['piper_web']['enabled']
+    assert virtual['execution']['motion']['empty_speed_scale'] is None
 
 
 def test_simulation_cannot_be_combined_with_hardware_execution():

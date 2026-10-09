@@ -29,8 +29,8 @@ def scene_from_config(cfg):
         rows, cols = box['grid']
         x, y, z = box['origin_m']
         objects.append(dict(id=f'aple_{grade.lower()}', label=grade, shape='preset:bin',
-                            pos=[x + pitch * rows / 2, y + pitch * cols / 2, z], movable=False,
-                            params=dict(inner=[pitch * rows / 2, pitch * cols / 2],
+                            pos=[x + pitch * cols / 2, y + pitch * rows / 2, z], movable=False,
+                            params=dict(inner=[pitch * cols / 2, pitch * rows / 2],
                                         wall_t=.002, wall_h=float(box['wall_height_m']) / 2,
                                         floor_t=.001)))
     return dict(version=1, name='APLE planned trajectory', cameras={'top': {'z': .8}}, objects=objects)

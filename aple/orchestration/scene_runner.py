@@ -62,7 +62,9 @@ class SceneRunner:
     def __init__(self, cfg: dict, pipeline: PickPlacePipeline, *, detect: DetectFn, estimate_apples: ApplesFn,
                  estimate_boxes: BoxesFn, plan_grasps: GraspsFn, light_for: LightFn | None = None,
                  backend: str | None = None, clock: Callable[[], float] = time.monotonic,
-                 capture_for_retry: Callable[[], SceneSnapshot] | None = None) -> None:
+                 capture_for_retry: Callable[[], SceneSnapshot] | None = None,
+                 capture_for_verification: Callable[[], SceneSnapshot] | None = None,
+                 before_execute: Callable | None = None) -> None:
         self.cfg = cfg
         self.pipeline = pipeline
         self._detect, self._apples, self._boxes, self._grasps = detect, estimate_apples, estimate_boxes, plan_grasps
@@ -80,7 +82,13 @@ class SceneRunner:
         if capture_for_retry is not None and not callable(capture_for_retry):
             raise TypeError("capture_for_retry must be callable")
         self._capture_for_retry = capture_for_retry
+        self._capture_for_verification = capture_for_verification
+        self._before_execute = before_execute
         self._execution_halted = False
+        self.last_verified_snapshot = None
+        self._verify_timeout = float(cfg["orchestration"].get("verify_timeout_s", 5.0))
+        if not math.isfinite(self._verify_timeout) or self._verify_timeout <= 0:
+            raise ValueError("verify_timeout_s must be finite and positive")
 
     @classmethod
     def from_config(cls, cfg: dict, pipeline: PickPlacePipeline, **kwargs) -> "SceneRunner":
@@ -130,6 +138,7 @@ class SceneRunner:
                          {"t_scan_s": t_scan, "t_plan_s": self._clock() - t0 - t_scan})
 
     def execute(self, plan: ScenePlan) -> SceneWorkPlan | None:
+        self.last_verified_snapshot = None
         if plan.work is None:
             return None
         if plan.work.scene_id != plan.snapshot.scene_id:
@@ -142,7 +151,7 @@ class SceneRunner:
             ))
         t0 = self._clock()
         try:
-            result = self.pipeline.execute_scene(
+            result = self._execute_verified(plan) if self._capture_for_verification is not None else self.pipeline.execute_scene(
                 plan.work, backend=self._backend, inspect_params=self._params, boxes=plan.boxes,
                 rescan_for_retry=(lambda item: self._retry_item(plan, item))
                     if self._capture_for_retry is not None else None,
@@ -156,6 +165,76 @@ class SceneRunner:
         plan.timings["t_exec_s"] = self._clock() - t0
         return result
 
+    def _execute_verified(self, initial: ScenePlan) -> SceneWorkPlan:
+        """Execute one tracked apple, rescan/verify, then replan remaining IDs.
+
+        A new scene may move or lose an apple. Never execute its old coordinates,
+        nor replace a missing ID with an unrelated detection.
+        """
+        current = initial
+        remaining = {i.apple.apple_id for i in initial.work.items}
+        completed = {}
+        while remaining and current.work is not None:
+            item = next((i for i in current.work.items if i.apple.apple_id in remaining
+                         and i.task.action in (TaskAction.PICK_PLACE, TaskAction.PICK_INSPECT_PLACE)
+                         and (i.placement is None or i.placement.feasible)), None)
+            if item is None:
+                break
+            started = self._clock()
+            if self._before_execute is not None:
+                self._before_execute(item, current.apples, current.boxes)
+            latest = [current.snapshot, current.boxes]
+            def retry(original):
+                fresh, boxes = self._retry_item(current, original)
+                latest[:] = [self._latest_retry_snapshot, boxes]
+                return fresh, boxes
+            one = self.pipeline.execute_scene(SceneWorkPlan(current.work.scene_id, (item,)),
+                backend=self._backend, inspect_params=self._params, boxes=current.boxes,
+                rescan_for_retry=retry
+                    if self._capture_for_retry is not None else None).items[0]
+            if one.execution is None or not one.execution.success:
+                completed[item.apple.apple_id] = replace(one, timings={**one.timings, 't_total_s': self._clock()-started})
+                break
+            try:
+                deadline = self._clock() + self._verify_timeout
+                post = self._capture_for_verification()
+                if (not isinstance(post, SceneSnapshot) or post.source != Source.TOP
+                        or post.capture_mode != CaptureMode.FULL
+                        or post.scene_id <= latest[0].scene_id
+                        or not math.isfinite(post.stamp_s) or post.stamp_s <= latest[0].stamp_s):
+                    raise ValueError("placement verification requires a fresh TOP exposure")
+                light = self._light_for(post) if self._light_for is not None else None
+                if light is not None and is_lighting_fault(light):
+                    raise ValueError('lighting fault during placement verification')
+                post_boxes = tuple(self._boxes(post))
+                one = self.pipeline.verify_item(one, latest[1], post_boxes)
+                if self._clock() > deadline:
+                    raise TimeoutError("placement verification deadline exceeded")
+            except TimeoutError:
+                one = replace(one, execution=ExecResult(False, FailureCode.TIMEOUT, Phase.RETREAT))
+                post = None
+            except (ValueError, RuntimeError) as exc:
+                _LOG.error("placement verification failed: %s", exc)
+                one = replace(one, execution=ExecResult(False, FailureCode.ABORTED, Phase.RETREAT))
+                post = None
+            one = replace(one, timings={**one.timings, 't_total_s': self._clock()-started})
+            completed[item.apple.apple_id] = one
+            remaining.remove(item.apple.apple_id)
+            if not one.execution.success:
+                break
+            self.last_verified_snapshot = post
+            if remaining:
+                # plan() estimates fresh positions and grades, preserving tracking.
+                current = self.plan(post)
+                completed[item.apple.apple_id] = replace(one, timings={
+                    **one.timings, 't_total_s': self._clock()-started})
+        return SceneWorkPlan(initial.work.scene_id, tuple(
+            completed.get(i.apple.apple_id, i if i.task.action not in
+                          (TaskAction.PICK_PLACE, TaskAction.PICK_INSPECT_PLACE) or
+                          (i.placement is not None and not i.placement.feasible) else
+                          replace(i, task=replace(i.task, action=TaskAction.DEFER), placement=None))
+            for i in initial.work.items))
+
     def _retry_item(self, plan: ScenePlan, original: AppleWorkPlan):
         """Recapture position/occupancy, retaining only this apple's original top grade.
 
@@ -166,7 +245,8 @@ class SceneRunner:
         snap = self._capture_for_retry()
         if (not isinstance(snap, SceneSnapshot) or snap.source != Source.TOP
                 or snap.capture_mode != CaptureMode.FULL
-                or snap.scene_id <= plan.snapshot.scene_id):
+                or snap.scene_id <= plan.snapshot.scene_id
+                or not math.isfinite(snap.stamp_s) or snap.stamp_s <= plan.snapshot.stamp_s):
             raise ValueError("slip recovery requires a fresh FULL TOP snapshot")
         light = self._light_for(snap) if self._light_for is not None else None
         if light is not None and is_lighting_fault(light):
@@ -180,9 +260,12 @@ class SceneRunner:
         top_grade = next(g for g in plan.grades if g.apple_id == apple.apple_id)
         grade = replace(top_grade, scene_id=snap.scene_id, final=False)
         boxes = tuple(self._boxes(snap))
-        grasps = tuple(self._grasps((apple,)))
+        grasps = tuple(g for g in self._grasps(apples) if g.apple_id == apple.apple_id)
         work = self.pipeline.plan_scene((apple,), (grade,), boxes, grasps)
         self._prev_apples = list(apples)
+        self._latest_retry_snapshot = snap
+        if self._before_execute is not None:
+            self._before_execute(work.items[0], apples, boxes)
         return work.items[0], boxes
 
     def records(self, snap: SceneSnapshot, plan: ScenePlan, execution: SceneWorkPlan | None) -> list[CycleRecord]:
@@ -197,7 +280,11 @@ class SceneRunner:
                 raise ValueError("execution items must uniquely match planned apple_ids")
         grade_by_id = {g.apple_id: g for g in plan.grades}
         t_scan, t_plan = plan.timings.get("t_scan_s", 0.0), plan.timings.get("t_plan_s", 0.0)
-        t_exec = plan.timings.get("t_exec_s", 0.0)
+        # Scene capture/planning is shared overhead. Allocate once across rows,
+        # rather than repeating the scene duration for each apple.
+        if plan.work is not None:
+            count = max(1, len(plan.work.items))
+            t_scan, t_plan = t_scan / count, t_plan / count
 
         if plan.work is None:                          # 조명 FAULT 또는 사과 없음 — 장면 1행으로 남긴다
             stage = FailStage.D1 if plan.blocked == "no_apples" else FailStage.NONE
@@ -219,14 +306,7 @@ class SceneRunner:
                 code = FailureCode.ABORTED
             rows.append(self._row(snap, item.task.apple_id, done.apple,
                                   done.final_grade or grade_by_id.get(item.task.apple_id),
-                                  done, ex, success, code, stage, t_scan, t_plan, t_exec))
-        if execution is None:
-            # Dry-run plans reserve cells too; no apple was placed in those cells.
-            # Executed reservations must remain until external placement verification.
-            for item in plan.work.items:
-                placement = item.placement
-                if placement is not None and placement.feasible:
-                    self.pipeline.release_placement_reservation(int(placement.box_id), placement.cell_index)
+                                  done, ex, success, code, stage, t_scan, t_plan, 0.0))
         return rows
 
     # ------------------------------------------------------------ 내부
@@ -249,11 +329,16 @@ class SceneRunner:
             reject_reason=grade.reject_reason if grade is not None else RejectReason.OCCLUDED,
             target_box=placement.box_id if placement is not None else Grade.REJECT,
             target_cell=placement.cell_index if placement is not None else -1,
-            grasp_force_set_n=item.profile.grasp_force_n if item is not None else nan,
+            grasp_force_set_n=(item.profile.grasp_force_n if item is not None
+                               and self.cfg["execution"]["gripper"]["control_mode"] == "calibrated_force" else nan),
             planned_drop_m=placement.planned_drop_m if placement is not None else nan,
-            settle_error_m=nan,
-            t_scan_s=t_scan, t_plan_s=t_plan, t_pick_s=nan, t_inspect_s=nan, t_place_s=nan,
-            t_total_s=t_scan + t_plan + t_exec,
+            settle_error_m=(item.placement_verification.settle_error_m
+                            if item is not None and item.placement_verification is not None else nan),
+            t_scan_s=t_scan, t_plan_s=t_plan,
+            t_pick_s=item.timings.get('t_pick_s', nan) if item else nan,
+            t_inspect_s=item.timings.get('t_inspect_s', nan) if item else nan,
+            t_place_s=item.timings.get('t_place_s', nan) if item else nan,
+            t_total_s=t_scan + t_plan + (item.timings.get('t_total_s', 0.0) if item else 0.0),
             success=bool(success), failure_code=code, fail_stage=stage,
         )
 

@@ -60,11 +60,13 @@
 | 7 | 트레이·상자 위치 `workcell.tray`, `workcell.boxes.*.origin_m` | A | `m1_live` (#13) | 상자 칸 높이가 빈 상자에서 0 근처 |
 | 8 | 사과 직경 (깊이 vs 캘리퍼스) | A·D | `run_cycle --live --save` + 캘리퍼스 | 직경 오차 ≤ 3 mm |
 | 9 | 착색 기준 `varieties.*.hue_range_deg`, `min_chroma`, `top_view_bias`·`top_view_error`, `delta_up` | C | `color_session suggest · truth --poses first|all · curve --apply` | 육안 판정 일치율 ≥ 90% (`compare`) |
-| 10 | 파지력 `size_bins.force.*`, `size_bins.gripper_calib` | D·B | FSR + `field_values set` | 사과 무게 + 가속에서 미끄러짐 없음, 멍 기준 아래 |
+| 10 | 기본 fixed_effort: Studio 토크·장착 후 접촉 폭·패드 압축·접촉 안정 시간; calibrated_force 선택 시 `size_bins.force.*`, `size_bins.gripper_calib` 및 피드백 백엔드 | D·B | 실측 + `field_values set`; FSR는 선택 경로 | 리프트 후 새 깊이 영상으로 파지 확인, 운반에서 슬립/손상 없음 |
 | 11 | 모드 B `inspection.slip_check.*`, `inspection.in_hand_mask.surface_tol_m` | C | 미끄러지지 않게 잡고 검사 자세로 돌리며 `--save` → 거리 분포 | 미끄러지지 않은 회전의 99% 가 통과 |
 | 12 | `execution.placement_verify.height_tol_m` | B·A | 빈 칸 반복 촬영의 높이 흔들림 | 흔들림의 3배 |
 
-각 단계가 끝나면 `field_values list` 의 **필수** 값 개수가 줄어든다. 0 이 되어야 실기 실행(`run_cycle --execute`)을 연다.
+각 단계가 끝나면 `field_values list`의 미측정 항목이 줄어든다. 목록 개수는 주석 기준이며 장착 여부·백엔드 조건을 구분해야 한다.
+10/9 실기 조립에는 시간 궤적·접촉 안정·충돌 링크 등 추가 값이 필요하다. [전체 인수인계와 추가 설정](pr_execution_handoff_20261009.md)을 확인하고
+`missing_for_live_execution` 점검 및 실제 추종/파지/안착 확인을 모두 통과한 뒤 `run_cycle --live --execute`를 연다.
 비워 두는 게 정상인 값(자동 선택·자동 계산·다른 모드에서만 필요)은 설정 주석에 `[선택]` 을 달아 필수에서 뺀다 (`list --all` 로 보기).
 
 **깊이 거리 (2-1단계, #29)**: 10/7 실물 D435i 는 실제 0.30 / 0.43 / 0.74 m 에서 깊이가 26 / 33 / 45% 짧았다

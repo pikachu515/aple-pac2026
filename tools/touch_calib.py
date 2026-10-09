@@ -17,13 +17,19 @@
        python tools/touch_calib.py mark data/calib/touch.npz --session data/calib/touch.json
        키: 클릭 = 점 추가   u = 마지막 점 취소   q / Enter = 끝 (클릭할 때마다 저장된다)
      이 뒤로 표식을 움직이지 않는다.
+  2-1. (자로 재기 어려우면) 피벗 보정으로 플랜지 → 핑거 끝 오프셋을 구한다 — 그리퍼를 닫고 핑거 끝을
+       표식 하나에 댄 채, 끝은 그 자리에 두고 손목 각도만 바꿔 4~6 자세를 기록한다 (각도 차 20° 이상)
+       python tools/touch_calib.py pivot --session data/calib/touch.json --iface can0 [--save configs/workcell.yaml]
+       결과는 세션에 저장돼 다음 robot 단계가 쓴다. --save 는 workcell.tcp_offset_m 에도 쓴다
   3. 로봇 끝점을 표식 중심에 차례로 대고 좌표를 입력한다 (클릭한 순서와 같게)
        python tools/touch_calib.py robot --session data/calib/touch.json
        입력: "x y z"            팁 끝 위치 (mm, base_link)
              "x y z rx ry rz"   플랜지 위치 (mm) + 자세 (deg) → workcell.tcp_offset_m 으로 팁 끝 계산
              빈 줄 = 건너뛰기, q = 중단
        --auto: Piper Web 관절각 + Piper Studio 순기구학(piper_robot.kinematics)으로 자동 기록
-               (piper_web.enabled 와 follower iface 가 설정돼 있어야 한다)
+               --iface can0 으로 팔로워를 주거나, piper_web.enabled 와 iface 를 설정해 둔다.
+               팔로워는 리더암 텔레오퍼레이션(Studio 릴레이)으로 표식에 댄다.
+               piper_robot 은 PYTHONPATH 로 (docs/simulation.md)
   4. 맞추고 점검한 뒤 저장한다
        python tools/touch_calib.py fit --session data/calib/touch.json                  # 결과만 보기
        python tools/touch_calib.py fit --session ... --drop P4                          # 의심 점 빼기
@@ -199,14 +205,19 @@ def cmd_mark(args) -> None:
     print(f"점 {len(session['points'])}개 → {args.session}")
 
 
-def _piper_fk():
-    """Piper Studio 순기구학 함수 (관절각 rad 6개 → 4×4 플랜지 자세). 함수 이름은 설치본에서 찾는다."""
+def _piper_fk(kin=None):
+    """Piper Studio 순기구학 함수 (관절각 rad 6개 → 4×4 플랜지 자세). 함수 이름은 설치본에서 찾는다.
+
+    v0.5.12 설치본에는 fk 함수가 없고 link_transforms(q (N,6), geometry) → (N, 링크, 4, 4) 만 있다.
+    그때는 실행 코드(aple/execution/trajectory.build_piper_kinematics)와 같게 link6 플랜지를 꺼낸다.
+    """
     from importlib import import_module
-    try:
-        kin = import_module("piper_robot.kinematics")
-    except ImportError as e:
-        raise SystemExit("piper_robot.kinematics 를 불러올 수 없다 — Piper Studio 와 같은 Python 환경에서 "
-                         "실행하거나 수동 입력을 쓴다") from e
+    if kin is None:
+        try:
+            kin = import_module("piper_robot.kinematics")
+        except ImportError as e:
+            raise SystemExit("piper_robot.kinematics 를 불러올 수 없다 — PYTHONPATH 에 Piper Studio 의 piper_robot 을 "
+                             "넣거나(docs/simulation.md) 수동 입력을 쓴다") from e
     for name in ("fk", "forward_kinematics", "forward"):
         fn = getattr(kin, name, None)
         if callable(fn):
@@ -220,8 +231,88 @@ def _piper_fk():
                     T[:3, 3] /= 1000.0
                 return T
             return run
+    if callable(getattr(kin, "link_transforms", None)) and callable(getattr(kin, "geometry", None)):
+        geom = kin.geometry()
+        if geom.tip != "link6":
+            raise SystemExit(f"piper_robot 기구학의 끝 링크가 link6 이 아니다 ({geom.tip}) — 플랜지 기준이 다르다")
+
+        def run_links(q):
+            links = np.asarray(kin.link_transforms(np.asarray(q, dtype=float)[None, :], geom), dtype=float)
+            return links[0, geom.tip_index]
+        return run_links
     public = [n for n in dir(kin) if not n.startswith("_")]
     raise SystemExit(f"piper_robot.kinematics 에 순기구학 함수가 없다 (있는 것: {public}) — 수동 입력을 쓴다")
+
+
+def pivot_fit(flanges: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """피벗 보정 — 끝점을 한 점에 고정하고 자세만 바꾼 플랜지 자세들 → (플랜지 좌표계 끝점 오프셋,
+    base 좌표계 고정점, 자세별 잔차 m, 자세 간 최대 회전각 deg).
+
+    R_i · t + p_i = x  (모든 i)  →  [R_i  −I] [t; x] = −p_i 를 최소제곱으로 푼다.
+    회전이 다양하지 않으면 t 가 정해지지 않는다 (최대 회전각 20° 이상 권장).
+    """
+    if len(flanges) < 4:
+        raise ValueError("자세가 4개 이상 필요하다")
+    A = np.vstack([np.hstack([T[:3, :3], -np.eye(3)]) for T in flanges])
+    b = np.concatenate([-T[:3, 3] for T in flanges])
+    sol = np.linalg.lstsq(A, b, rcond=None)[0]
+    t, x = sol[:3], sol[3:]
+    res = np.array([np.linalg.norm(T[:3, :3] @ t + T[:3, 3] - x) for T in flanges])
+    spread = max(np.degrees(np.arccos(np.clip((np.trace(Ti[:3, :3].T @ Tj[:3, :3]) - 1) / 2, -1, 1)))
+                 for i, Ti in enumerate(flanges) for Tj in flanges[i + 1:])
+    return t, x, res, float(spread)
+
+
+def _auto_reader(cfg: dict, iface: str | None):
+    """→ (fk, studio). 관절각 읽기만 한다 — iface 를 주면 이 실행에서만 켜고 설정 파일은 그대로."""
+    from aple.hal.piper_studio import PiperStudio
+    if iface:
+        cfg["piper_web"] = {**cfg["piper_web"], "enabled": True, "iface": iface}
+    return _piper_fk(), PiperStudio(cfg)
+
+
+def cmd_pivot(args) -> None:
+    session = load_session(args.session)
+    fk, studio = _auto_reader(load_config(), args.iface)
+    flanges: list[np.ndarray] = []
+    print("그리퍼를 닫고 핑거 끝을 표식 하나에 댄다. 끝은 그 자리에 두고 손목 각도만 바꿔 가며 Enter (4~6번, q = 끝)")
+    while True:
+        text = input(f"자세 {len(flanges) + 1} > ").strip().lower()
+        if text == "q":
+            break
+        if text == "u" and flanges:
+            flanges.pop()
+            print("  마지막 자세 취소")
+            continue
+        flanges.append(np.asarray(fk(studio.joint_state()), dtype=float))
+        print(f"  기록 — 플랜지 {_mm(flanges[-1][:3, 3])}")
+    try:
+        t, x, res, spread = pivot_fit(flanges)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    print(f"끝점 오프셋 (플랜지 좌표계) {_mm(t)}  — 길이 {np.linalg.norm(t) * 1000:.1f} mm")
+    print(f"고정점 (base_link) {_mm(x)}")
+    print(f"자세별 잔차 {', '.join(f'{r * 1000:.1f}' for r in res)} mm (중앙값 {np.median(res) * 1000:.1f}),"
+          f" 자세 간 최대 회전 {spread:.0f}°")
+    warn = []
+    if spread < 20:
+        warn.append("자세 간 회전이 20° 미만 — 손목을 더 크게 돌려 다시 한다")
+    if np.median(res) > 0.003:
+        warn.append("잔차 중앙값이 3 mm 를 넘는다 — 기록 중에 끝이 미끄러졌을 수 있다")
+    for w in warn:
+        print(f"[경고] {w}")
+    if warn and not args.force:
+        print("저장하지 않았다 (--force 로 저장)")
+        return
+    session["tcp_offset_m"] = [round(float(v), 5) for v in t]
+    session["pivot"] = {"flanges": [T.round(6).tolist() for T in flanges], "residuals_m": res.round(5).tolist()}
+    save_session(args.session, session)
+    print(f"세션에 저장: {args.session} (robot 단계가 이 오프셋을 쓴다)")
+    if args.save:
+        from aple.config import set_config_value
+        line = set_config_value(str(args.save), "workcell.tcp_offset_m", session["tcp_offset_m"],
+                                note="touch_calib pivot")
+        print(f"{args.save}: {line.strip()}")
 
 
 def cmd_robot(args) -> None:
@@ -229,12 +320,15 @@ def cmd_robot(args) -> None:
     if not session["points"]:
         raise SystemExit("세션에 점이 없다 — mark 를 먼저 한다")
     cfg = load_config()
-    offset = tcp_offset_from_cfg(cfg)
-    print(f"tcp_offset_m = {offset.tolist()} (플랜지 자세를 넣을 때만 쓰인다)")
+    if session.get("tcp_offset_m") is not None:       # 피벗 보정 결과가 우선
+        offset = np.asarray(session["tcp_offset_m"], dtype=float)
+        print(f"tcp_offset_m = {offset.tolist()} (세션의 피벗 보정 결과)")
+    else:
+        offset = tcp_offset_from_cfg(cfg)
+        print(f"tcp_offset_m = {offset.tolist()} (workcell.yaml)")
     fk = studio = None
     if args.auto:
-        from aple.hal.piper_studio import PiperStudio
-        fk, studio = _piper_fk(), PiperStudio(cfg)
+        fk, studio = _auto_reader(cfg, args.iface)
 
     for p in session["points"]:
         if p["base_m"] is not None and not args.redo:
@@ -316,6 +410,13 @@ def main(argv: list[str] | None = None):
     r.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "touch.json")
     r.add_argument("--auto", action="store_true", help="관절각 + Piper 순기구학으로 자동 기록")
     r.add_argument("--redo", action="store_true", help="이미 기록한 점도 다시 묻는다")
+    r.add_argument("--iface", help="--auto 에서 관절각을 읽을 팔로워 (예: can0). 주면 piper_web.enabled 없이 읽기만 한다")
+
+    pv = sub.add_parser("pivot", help="피벗 보정으로 플랜지 → 핑거 끝 오프셋 구하기 (자로 재지 않을 때)")
+    pv.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "touch.json")
+    pv.add_argument("--iface", help="관절각을 읽을 팔로워 (예: can0)")
+    pv.add_argument("--save", type=Path, help="workcell.tcp_offset_m 을 쓸 workcell.yaml")
+    pv.add_argument("--force", action="store_true", help="경고가 있어도 저장")
 
     f = sub.add_parser("fit", help="변환을 맞추고 점검, --save 로 workcell.yaml 에 저장")
     f.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "touch.json")
@@ -325,7 +426,7 @@ def main(argv: list[str] | None = None):
     f.add_argument("--force", action="store_true", help="경고가 있어도 저장")
 
     args = ap.parse_args(argv)
-    return {"grab": cmd_grab, "mark": cmd_mark, "robot": cmd_robot, "fit": cmd_fit}[args.cmd](args)
+    return {"grab": cmd_grab, "mark": cmd_mark, "robot": cmd_robot, "pivot": cmd_pivot, "fit": cmd_fit}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -110,6 +110,10 @@ def _roi_depth_uv(depth_m: np.ndarray, roi: tuple[int, int, int, int]) -> tuple[
     return _roi_pixels(depth_m[..., None], roi)[:, 0], uv[:, 0], uv[:, 1]
 
 
+#: 카드 ROI 에서 깊이가 있는 픽셀이 이 비율보다 적으면 깊이 평면 없이 보정한다
+CARD_MIN_DEPTH = 0.5
+
+
 def fit_card_plane(depth_m: np.ndarray, roi: tuple[int, int, int, int], tol_m: float = CARD_DEPTH_TOL_M,
                    iters: int = 300, seed: int = 0) -> tuple[float, float, float]:
     """카드 면 깊이 평면 (중심 깊이, du, dv) — RANSAC.
@@ -159,6 +163,8 @@ def calibrate_card(bgr: np.ndarray, roi: tuple[int, int, int, int], depth_m: np.
     """
     lin = _roi_pixels(bgr_to_linear_rgb(bgr), roi)
     plane = None
+    if depth_m is not None and (np.asarray(depth_m)[roi[1]:roi[1] + roi[3], roi[0]:roi[0] + roi[2]] > 0).mean() < CARD_MIN_DEPTH:
+        depth_m = None          # 10/10: 카드가 깊이 시야 밖(화면 가장자리) — 깊이 평면 없이 색만 보정 (가림 걸러내기 없음)
     if depth_m is not None:
         plane = fit_card_plane(depth_m, roi, tol_m)
         on_card = card_depth_mask(depth_m, roi, plane, tol_m)

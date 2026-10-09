@@ -385,7 +385,7 @@ def test_act_timeout_is_applied_without_exceeding_phase_a_limit(cfg):
 
     assert adapter.calls[0][1]["timeout_s"] == 12.0
 
-    cfg["execution"]["act"]["timeout_s"] = 45.0
+    cfg["execution"]["act"]["timeout_s"] = cfg["execution"]["timeouts"]["phase_a_s"] + 30.0   # phase A 한계보다 길게
     adapter.calls.clear()
     MotionExecutor(adapter, cfg).pick_place(apple(), profile(), grasp_candidate(), plan, backend="act")
 

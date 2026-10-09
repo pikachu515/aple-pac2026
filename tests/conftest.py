@@ -33,6 +33,7 @@ PRISTINE_VALUES = {"piper_web.iface": "PLACEHOLDER_follower", "piper_web.camera_
                    # 수제 핑거 실측 (10/9) 전 — 시뮬레이션·시험은 기본 Piper 그리퍼 기준
                    "piper_web.gripper_width_range_m": [0.0, 0.07], "size_bins.gripper_range_mm": [30, 100],
                    "inspection.slip_check.sigma_pose_m": 0.003,
+                   "execution.holding_check": "stop",
                    # 10/9 현장 검출·파지 조정 — 시험은 기본(깊이 분할·고정 개방)으로, 새 동작은 그 시험에서 켠다
                    "perception.detect.segment": "depth", "perception.detect.roi_margin_m": 0.0,
                    "perception.detect.keep_margin_m": 0.0, "perception.detect.split_by_height": False,

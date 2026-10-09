@@ -52,6 +52,7 @@ _DEFAULTS = {
     "tilt_start_m": None,           # null = 기울이지 않는다 (항상 수직)
     "tilt_full_m": 0.62,
     "max_tilt_deg": 25.0,
+    "tilt_close_axis": "tangential",  # 기울여 잡을 때 닫는 방향: tangential(접선, 두 핑거 같은 높이) | radial(반지름 방향)
 }
 
 
@@ -87,6 +88,14 @@ class GraspCandidate:
     open_width_m: float | None = None   # 틈에 맞춘 사전 개방 폭 (핑거 안쪽 면 사이). None = 그리퍼 기본값
 
 
+def _tilt_base_yaw(phi: float, p: dict) -> float:
+    """기울여 잡을 때 기본 닫힘 방향. radial: 베이스 쪽 ↔ 바깥쪽 (10/10 사람 시연 22회 중앙값 — 반지름과 4~16°)."""
+    axis = p.get("tilt_close_axis", "tangential")
+    if axis not in ("tangential", "radial"):
+        raise ValueError("grasp_planner.tilt_close_axis must be 'tangential' or 'radial'")
+    return (phi + (0.0 if axis == "radial" else math.pi / 2)) % math.pi
+
+
 def grasp_params(cfg: dict) -> dict:
     return {**_DEFAULTS, **(cfg.get("grasp_planner") or {})}
 
@@ -113,7 +122,7 @@ def plan_grasps(apples: list[AppleState], cfg: dict) -> list[GraspCandidate]:
         if 0 < tilt and math.degrees(tilt) >= float(p["tilt_yaw_free_below_deg"]):
             # 많이 기울이면 접선 방향 근처로만 닫는다 — 반지름 방향으로 닫으면 두 핑거 높이가 크게 달라진다
             dev = math.radians(float(p["tilt_yaw_dev_deg"]))
-            base_yaw = (phi + math.pi / 2) % math.pi
+            base_yaw = _tilt_base_yaw(phi, p)
             yaws_here = np.array([base_yaw + d for d in np.arange(-dev, dev + 1e-9, step)]) if dev > 0 \
                 else np.array([base_yaw])
         else:
@@ -178,7 +187,7 @@ def tool_orientation_at(center_xy, cfg: dict, yaw_rad: float | None = None) -> t
     R_down = rpy_to_matrix(*np.deg2rad(p["tool_down_rpy_deg"]))
     tilt = tilt_for(center_xy, p)
     phi = math.atan2(float(center_xy[1]), float(center_xy[0]))
-    yaw = (phi + math.pi / 2) % math.pi if tilt > 0 else float(yaw_rad or 0.0)
+    yaw = _tilt_base_yaw(phi, p) if tilt > 0 else float(yaw_rad or 0.0)
     R = rpy_to_matrix(0.0, 0.0, yaw) @ R_down
     if tilt > 0:
         R = _rot_axis((-math.sin(phi), math.cos(phi), 0.0), -tilt) @ R

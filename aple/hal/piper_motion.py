@@ -6,6 +6,7 @@ monitors feedback; the underlying jog API itself has no per-goal speed field.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from functools import wraps
@@ -527,7 +528,14 @@ class PiperTrajectoryMotionAdapter:
 
     def _confirm_holding(self, apple, apple_in_tcp, deadline):
         confirm = getattr(self._transport, 'confirm_holding', None)
-        return callable(confirm) and confirm(apple, apple_in_tcp, timeout_s=self._remaining(deadline)) is True
+        held = callable(confirm) and confirm(apple, apple_in_tcp, timeout_s=self._remaining(deadline)) is True
+        if not held and callable(confirm) and self._cfg['execution'].get('holding_check', 'stop') == 'warn':
+            # 10/9·10/10 실기: 실제로 쥐고 있는데 카메라 확인이 두 번 '안 잡음' (반대 경우는 없음).
+            # 놓쳤다면 빈 그리퍼로 상자에 가서 여는 것뿐이라 경고만 하고 계속한다
+            logging.getLogger(__name__).warning("apple %s: 들기 확인이 '안 잡음' — holding_check=warn 이라 계속",
+                                                apple.apple_id)
+            return True
+        return held
 
     def _set_payload(self, apple_in_tcp, apple, **kwargs):
         setter = getattr(self._segment_validator, 'set_payload', None)

@@ -1,5 +1,6 @@
 """Piper Web v0.5.9 adapter tests using a local fake HTTP server."""
 
+import math
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -836,3 +837,12 @@ def test_timeout_during_setup_never_starts_jog(piper_web, monkeypatch):
     with pytest.raises(PiperWebError, match='Timed out waiting'):
         studio.send_joint_goal((0, 1.57, -1.48, 0, 0, 0), timeout_s=.02)
     assert not any(path == '/api/robots/jog/start' for method, path, body in fake.calls)
+
+
+def test_target_just_outside_studio_range_is_clamped_to_edge(piper_web):
+    _, adapter = piper_web
+    folded = (0.0, math.radians(-1.6), math.radians(2.4), 0.0, 0.4, 0.0)   # 10/10 실측 접힌 자세
+    target = adapter._normalize_joint_target(folded)
+    assert target["joint2"] == pytest.approx(-100.0) and target["joint3"] == pytest.approx(100.0)
+    with pytest.raises(ValueError, match="joint2 target is outside"):
+        adapter._normalize_joint_target((0.0, math.radians(-8.0), 0.0, 0.0, 0.0, 0.0))

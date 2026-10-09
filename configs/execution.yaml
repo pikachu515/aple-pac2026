@@ -11,10 +11,11 @@ execution:
     velocity_limits_rad_s: [0.6, 0.6, 0.6, 0.8, 0.8, 1.0] # [제안 10/9 — 역할 B 확인] 약 34~57°/s — 첫 실기는 느리게
     acceleration_limits_rad_s2: [1.0, 1.0, 1.0, 1.5, 1.5, 2.0] # [제안 10/9 — 역할 B 확인]
     command_period_s: 0.05     # [제안 10/9 — 역할 B 확인] 20 Hz — Studio 릴레이가 ~30 Hz 로 안정 전송(10/9 관찰)
-    tracking_tolerance_rad: 0.05 # [제안 10/9 — 역할 B 확인] 2.9°
-    velocity_tolerance_rad_s: 0.2 # [제안 10/9 — 역할 B 확인]
+    tracking_tolerance_rad: 0.15 # [현장 10/10] 8.6° — Piper 는 펌웨어 속도로 따라가 2.9° 로는 실기 첫 이동부터 멈췄다 (10/9 실측)
+    velocity_tolerance_rad_s: 0.6 # [현장 10/10] 10/9 실기에서 0.2 는 정상 이동을 속도 초과로 멈췄다
     capture_joint_tolerance_rad: 0.0087 # [제안 10/9 — 역할 B 확인] 0.5° — 촬영 전후 관절 변화 허용치
-  timeouts: {named_pose_s: 20.0, phase_a_s: 30.0, phase_b_s: 15.0, inspect_s: 30.0}
+  timeouts: {named_pose_s: 90.0, phase_a_s: 90.0, phase_b_s: 60.0, inspect_s: 90.0}  # [현장 10/10] 저속 실기에서 시간 초과로 끊겨 넉넉히
+  holding_check: warn          # [현장 10/10] stop | warn — 들기 뒤 카메라 확인이 '안 잡음'이면 정지 / 경고만. 실기 오판 2회(실제로는 쥐고 있었음)
   camera_view:                 # 10/9 실기: 손목을 돌린 그리퍼가 탑뷰에서 사과를 가려 들기 확인(holding_verifier)이 실패
     max_occlusion: 0.25        # [임시 10/9] 들어 올린 사과가 팔·그리퍼에 이 비율 넘게 가리면 다른 그리퍼 자세를 먼저 찾는다
     finger_length_m: 0.11      # [임시 10/9 — 역할 D 실측 전] 수제 핑거: TCP(핑거 끝)에서 그리퍼 축을 따라 올라간 길이

@@ -95,6 +95,10 @@ class _EstopKeepAlive:
             raise PiperWebError("Piper Web did not confirm its E-stop heartbeat")
 
 
+#: 관절 목표가 Studio 범위 밖으로 이만큼(°)까지는 경계로 자른다. 더 벗어나면 거부한다
+LIMIT_EDGE_DEG = 5.0
+
+
 class PiperStudio:
     """Synchronous jog client requiring v0.5.12 torque readback for control."""
 
@@ -601,8 +605,11 @@ class PiperStudio:
                     or lower_deg >= upper_deg):
                 raise ValueError(f"piper_web joint limits for {name} are invalid")
             degrees = math.degrees(value)
-            if degrees < lower_deg or degrees > upper_deg:
+            if degrees < lower_deg - LIMIT_EDGE_DEG or degrees > upper_deg + LIMIT_EDGE_DEG:
                 raise ValueError(f"{name} target is outside configured Piper Web joint limits")
+            # 경계 바로 밖은 경계로 — robotd 도 같은 값으로 자른다. 10/10 실기: 접힌 자세(2축 -1.6°, 3축 +2.4°)에서
+            # 출발하는 궤적의 첫 점이 Studio 범위(2축 0°, 3축 0°) 밖이라 접힌 자세로 가는 이동조차 거부됐다
+            degrees = min(max(degrees, lower_deg), upper_deg)
             normalized[name] = (degrees - lower_deg) * 200.0 / (upper_deg - lower_deg) - 100.0
         return normalized
 

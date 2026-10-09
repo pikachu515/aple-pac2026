@@ -27,7 +27,9 @@ FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_jso
                   "closing_compression_m", "contact_settle_s", "contact_width_tolerance_m", "contact_stability_m")))
 
 #: null 이 아닌 실측 전 값 (자리표시자)
-PRISTINE_VALUES = {"piper_web.iface": "PLACEHOLDER_follower", "piper_web.camera_id": "PLACEHOLDER_d435"}
+PRISTINE_VALUES = {"piper_web.iface": "PLACEHOLDER_follower", "piper_web.camera_id": "PLACEHOLDER_d435",
+                   # 수제 핑거 실측 (10/9) 전 — 시뮬레이션·시험은 기본 Piper 그리퍼 기준
+                   "piper_web.gripper_width_range_m": [0.0, 0.07], "size_bins.gripper_range_mm": [30, 100]}
 
 _original_load = _config.load_config
 

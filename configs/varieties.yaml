@@ -32,7 +32,7 @@ inspection:
   slip_check:                     # 모드 B: 자세로 예측한 사과 중심 vs 깊이로 본 중심 (마할라노비스). T_base_camera 있을 때만
     sigma_lateral_m: 0.0015       # [임시] 깊이 관측의 옆 방향 오차
     sigma_axial_m: 0.003          # [임시] 깊이 방향 오차 (D435 편향 + Piper 8bit 양자화 4mm)
-    sigma_pose_m: 0.003           # [임시] 카메라–로봇 보정 + 순기구학 + 파지 측정 오차
+    sigma_pose_m: 0.008           # [실기 10/9] 카메라–로봇 보정(~6 mm)·TCP(±1 cm)·파지 오차 — 실측 첫 파지에서 예측↔관측 13 mm (3 mm 면 잡은 사과를 놓쳤다고 판정)
     max_mahalanobis: 3.37         # 3자유도 카이제곱 99% (√11.34). 미끄러지지 않은 회전 실측으로 sigma 를 맞춘다
   in_hand_mask:                   # 모드 B 촬영: 손에 든 사과 마스크 (핑거 제외, inspection/in_hand_provider.py)
     search_tol_m: 0.02            # 1차: 예측 구 표면 ± 20mm 안의 깊이 점 (미끄러져도 잡힘)

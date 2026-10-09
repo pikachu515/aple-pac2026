@@ -29,12 +29,13 @@ import cv2
 import numpy as np
 
 from aple.hal.calibration import backproject, camera_to_base, validate_T
+from aple.hal.depth_correction import DepthCorrection
 from aple.perception.geometry import sphere_from_silhouette
 from aple.schema import AppleDetection2D, AppleState, SceneSnapshot
 
 _DEFAULTS = {
     "tracker": {"match_radius_m": 0.03},
-    "sphere_fit": {"ransac_threshold_m": 0.003, "max_fit_residual_m": None, "max_radius_disagreement": 0.25},
+    "sphere_fit": {"ransac_threshold_m": 0.003, "max_fit_residual_m": None, "max_radius_disagreement": 0.5},
     "depth": {"min_valid_ratio": 0.4},
     "max_clearance_m": 0.2,
     "top_percentile": 95,
@@ -51,6 +52,7 @@ def pose_params(cfg: dict) -> dict:
 
 def estimate(snap: SceneSnapshot, dets: list[AppleDetection2D], T_base_camera: np.ndarray,
              prev: list[AppleState] | None, cfg: dict) -> list[AppleState]:
+    snap = DepthCorrection.from_cfg(cfg).snapshot(snap)
     p = pose_params(cfg)
     T = validate_T(T_base_camera)
     for d in dets:

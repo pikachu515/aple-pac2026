@@ -2,6 +2,12 @@
 # 현장에서는 Piper Studio 회색 카드 보정·조명 감시를 쓰고, Piper Studio 밖에서 D435를 직접 쓸 때
 # aple/inspection/color.py 가 같은 일을 한다.
 color:
-  gray_card: {target_srgb: 118, delta_e_warn: 2.5, delta_e_fault: 6.0}
-  card_json: null                 # tools/color_session.py card 결과 경로 (현장 세션 폴더의 card.json). CardMonitor 가 읽는다
+  gray_card:
+    target_srgb: 118
+    delta_e_warn: 2.5
+    delta_e_fault: 12.0  # [현장 10/10] 6 → 12: 보정 직후에도 프레임마다 ΔE 6~7 로 튀어(조명 깜빡임) 실행이 시작부터 막혔다
+    depth_tol_m: 0.01             # [임시] 카드 면 ± 이 거리만 카드 픽셀 — 회색 그리퍼(카드 위에 뜬 것)를 뺀다. D435 카드 깊이 잡음 실측 후
+    min_visible: 0.5              # 보이는 카드가 이 비율 미만이면 가려진 것 (조명 변화로 치지 않는다)
+    occluded_reuse_s: 30.0        # [임시] 가려졌을 때 마지막으로 카드가 보였던 상태를 쓸 수 있는 시간 — 사과 1개 픽업~모드 B 끝까지
+  card_json: data/field/1010_light2/card.json  # [실측 10/10 04:08 — 조명 변화 ΔE 7 로 재보정] 카드를 화면 오른쪽 아래(트레이 오른쪽 아래 테이블)로 옮긴 뒤
   patch_json: null                # [미사용 10/8] 대회장 실내라 레퍼런스 패치 보정은 쓰지 않는다 (전략 S3-8). 비워 두면 회색 카드만

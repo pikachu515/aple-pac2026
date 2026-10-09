@@ -135,6 +135,20 @@ class ModeBResult:
     recovery: SlipRecoveryResult | None = None
 
 
+def _with_candidate_opening(profile, candidate, cfg):
+    """파지 후보가 틈에 맞춘 개방 폭(open_width_m)을 주면 그만큼만 벌린다 (그리퍼 실측 범위 안으로 자른다).
+
+    10/9 실기: 사과가 붙어 놓이면 기본 개방 폭으로는 이웃 사과에 핑거가 닿아 보류됐다."""
+    width = getattr(candidate, "open_width_m", None)
+    if width is None or not profile.feasible:
+        return profile
+    lo_hi = cfg.get("piper_web", {}).get("gripper_width_range_m")
+    if lo_hi is not None:
+        width = min(max(float(width), float(lo_hi[0])), float(lo_hi[1]))
+    from dataclasses import replace as _replace
+    return _replace(profile, open_width_m=float(width))
+
+
 class PickPlacePipeline:
     """Join scene signals by the shared ``(scene_id, apple_id)`` contract."""
 
@@ -158,7 +172,98 @@ class PickPlacePipeline:
         self._executor = (
             MotionExecutor(motion_adapter, cfg) if motion_adapter is not None else None
         )
+        # 실행 직전 IK 확인용 (스크립트 실기 어댑터만 갖는다). 없으면 후보를 바꾸지 않는다
+        planner = getattr(motion_adapter, "_planner", None)
+        self._ik_solver = getattr(planner, "_ik_solver", None)
+        self._arm_occlusion = None
+        if self._ik_solver is not None:
+            from aple.execution.camera_view import ArmOcclusion
+            self._arm_occlusion = ArmOcclusion.from_config(cfg)
         self._placement_planner = PlacementPlanner(cfg)
+
+    #: 실행 직전에 시험할 후보 — (그리퍼 축 둘레 회전 deg, 바깥 기울기 추가 deg). 10/9 실기: 간격만 보고 고른
+    #: 그리퍼 방향이 IK 로 풀리지 않는 위치가 있었다 (같은 위치에서 다른 방향은 접근·집기 모두 풀림).
+    #: 각 후보는 그리퍼 축 둘레 180° 뒤집은 자세(같은 파지)도 함께 시험한다 — 6축 ±115° 한계로 한쪽만 풀린다
+    IK_VARIANTS_DEG = tuple((yaw, tilt) for tilt in (0, 10, 20)
+                            for yaw in (0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90))
+
+    def _ik_feasible_candidate(self, item: AppleWorkPlan) -> AppleWorkPlan:
+        """접근·집기·대기·놓기 자세가 모두 IK 로 풀리고 탑뷰에서 사과가 보이는 그리퍼 자세를 고른다 (계산만).
+
+        후보 순서대로: 180° 대칭 두 자세 중 풀리는 것, 그중 손목(4·6축)이 덜 도는 쪽을 고른다. 들어 올린 사과가
+        execution.camera_view.max_occlusion 넘게 가리면 (10/9 실기: 손목을 돌린 그리퍼가 탑뷰를 가려 들기 확인 실패)
+        다음 후보를 보고, 끝까지 없으면 가장 덜 가리는 자세를 쓴다."""
+        if self._ik_solver is None or item.grasp_candidate is None or item.placement is None:
+            return item
+        from aple.execution.goal_builder import build_targets
+        from aple.perception.grasp_planner import (flip_about_tool_axis, nearest_tool_flip, quat_matrix,
+                                                   quat_xyzw, tool_orientation_at)
+        seed = tuple(self._cfg["workcell"]["poses"].get("scan_joint_rad") or (0.0,) * 6)
+        place_q = (tool_orientation_at(item.placement.place_center_m[:2], self._cfg)
+                   if (self._cfg.get("grasp_planner") or {}).get("tilt_start_m") is not None else None)
+        max_occ = float(((self._cfg.get("execution") or {}).get("camera_view") or {}).get("max_occlusion", 1.0))
+        cand = item.grasp_candidate
+        R0 = quat_matrix(cand.grasp_pose.orientation_xyzw)
+        c = np.asarray(cand.grasp_pose.position_m[:2], float)
+        phi = math.atan2(float(c[1]), float(c[0]))
+        k = np.array([-math.sin(phi), math.cos(phi), 0.0])
+        open_w = float(getattr(cand, "open_width_m", None) or item.profile.open_width_m)
+
+        def rot(axis, angle):
+            axis = np.asarray(axis, float) / np.linalg.norm(axis)
+            K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+            return np.eye(3) + math.sin(angle) * K + (1 - math.cos(angle)) * K @ K
+
+        def solve_chain(variant):
+            q_place = None if place_q is None else nearest_tool_flip(place_q, variant.grasp_pose.orientation_xyzw)
+            try:
+                t = build_targets(item.apple, item.profile, variant, item.placement, q_place)
+            except ValueError:
+                return None
+            chain, q = [], seed                          # 실행과 같은 순서·시드: 접근 → 집기, 접근(들기) → 대기 → 놓기
+            for pose, start in ((t.pregrasp_pose, 0), (t.pick_pose, 1), (t.hover_pose, 1), (t.place_pose, 3)):
+                q = self._ik_solver.solve(pose, seed if start == 0 else chain[start - 1])
+                if q is None:
+                    return None
+                chain.append(q)
+            turn = sum(abs(b[j] - a[j]) for a, b in zip((seed, chain[0], chain[0]), chain[:3]) for j in (3, 5))
+            return t, chain, turn
+
+        best = None                                     # (가림, 순번, 후보, 회전 각)
+        for order, (yaw_deg, tilt_deg) in enumerate(self.IK_VARIANTS_DEG):
+            R = rot(k, -math.radians(tilt_deg)) @ R0 @ rot((0, 0, 1), math.radians(yaw_deg))
+            q = quat_xyzw(R)
+            solved = []
+            for flipped, qq in ((False, q), (True, flip_about_tool_axis(q))):
+                variant = replace(cand, grasp_pose=Pose3D(cand.grasp_pose.position_m, qq),
+                                  grasp_yaw_rad=cand.grasp_yaw_rad + math.radians(yaw_deg) + (math.pi if flipped else 0.0),
+                                  approach_vector=tuple(float(v) for v in -R[:, 2]))
+                result = solve_chain(variant)
+                if result is not None:
+                    solved.append((result[2], flipped, variant, result))
+            if not solved:
+                continue
+            turn, flipped, variant, (t, chain, _) = min(solved, key=lambda s: s[0])
+            occ = self._lift_occlusion(item, t, chain[0], open_w)
+            if best is None or occ < best[0]:
+                best = (occ, order, variant, (yaw_deg, tilt_deg, flipped, turn))
+            if occ <= max_occ:
+                break
+        if best is None:
+            return item
+        occ, _, variant, (yaw_deg, tilt_deg, flipped, turn) = best
+        _LOG.info("apple %s: 그리퍼 자세 (축 회전 %+d°%s, 기울기 %+d°) 손목 회전 %.0f° 탑뷰 가림 %.0f%%",
+                  item.apple.apple_id, yaw_deg, " +180°" if flipped else "", tilt_deg,
+                  math.degrees(turn), 100 * occ)
+        return replace(item, grasp_candidate=variant)
+
+    def _lift_occlusion(self, item: AppleWorkPlan, targets, lift_joints, open_width_m: float) -> float:
+        """들어 올린 자세(접근 자세)에서 사과가 탑뷰에 가린 비율. 가림 모형이 없으면 0."""
+        if self._arm_occlusion is None:
+            return 0.0
+        lift = (np.asarray(item.apple.center_m, float) + np.asarray(targets.pregrasp_pose.position_m, float)
+                - np.asarray(targets.pick_pose.position_m, float))
+        return self._arm_occlusion.fraction(lift_joints, lift, item.apple.diameter_m / 2, open_width_m)
 
     def plan_scene(
         self,
@@ -216,7 +321,9 @@ class PickPlacePipeline:
             raise ValueError("grasp_candidates must match an AppleState in the scene")
 
         profiles = {
-            (apple.scene_id, apple.apple_id): select_grasp_profile(apple, self._cfg)
+            (apple.scene_id, apple.apple_id): _with_candidate_opening(
+                select_grasp_profile(apple, self._cfg), candidates_by_key.get((apple.scene_id, apple.apple_id)),
+                self._cfg)
             for apple in apples
         }
         candidate_clearance = {
@@ -379,6 +486,7 @@ class PickPlacePipeline:
                 f"PICK_PLACE task for apple {item.apple.apple_id} has no grasp candidate"
             )
 
+        item = self._ik_feasible_candidate(item)
         self._placement_planner.reserve(item.placement)
         started = time.monotonic()
         result = self._executor.pick_place(

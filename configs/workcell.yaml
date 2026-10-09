@@ -3,8 +3,8 @@
 workcell:
   expected_apple_count: 5
   frames: {base: base_link, camera: camera_top_optical_frame, tcp: tcp}
-  T_base_camera: null           # 4x4, eye-to-hand 캘리브레이션 결과 (m)
-  tcp_offset_m: null            # 핑거 어댑터 반영
+  T_base_camera: [[0.108625, 0.970792, -0.213925, 0.604247], [0.994081, -0.106513, 0.021408, -0.019443], [-0.002004, -0.214984, -0.976616, 0.936367], [0, 0, 0, 1]] # [임시] 10/10 06:10 카메라 건드린 뒤 재보정 — 손목 마커 id13 7자세, 마커 중심 위치만 맞춤(작은 마커 방향·깊이 축척 제외) 잔차 중앙 4.8 mm, 한 자세 빼기 탁자 위 차이 중앙 ~7 mm (data/calib/handeye_1010.json — tools/handeye_aruco.py fit 은 마커 방향 오류로 잔차 24 mm). 이전값(10/9 20:40)과 탁자 위 ~26 mm 차이
+  tcp_offset_m: [0.0032, 0.002, 0.2023]    # [실측 10/10] 10/9 20:42 피벗 6자세 (회전 152°, 잔차 중앙 ~8 mm — 끝 미끄러짐) data/calib/pivot_1009.json. 자 실측(플랜지 면) 143 mm 와 다름 — link6 원점이 면보다 안쪽
   tray:                         # base_link 축 정렬 사각형
     center_m: null              # [x, y, z] 트레이 바닥 윗면 중심 (m), 현장 실측. null 이면 영상 전체에서 검출
     size_m: [0.3, 0.2]
@@ -15,5 +15,21 @@ workcell:
     UPPER:  {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08, origin_m: null}
     MIDDLE: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08, origin_m: null}
     REJECT: {grid: [2, 3], cell_pitch_m: 0.09, wall_height_m: 0.08, origin_m: null}
-  placement: {max_drop_m: 0.03, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near}
-  poses: {home_joint_rad: null, scan_joint_rad: null}
+  # 카메라로 상자·리젝트 종이 구역·사과 집는 영역 찾기 (aple/perception/workcell_detect.py, tools/workcell_detect.py)
+  # enabled 면 장면마다 찾아 boxes.*.origin_m·grid·wall_height_m 과 tray(집는 영역)를 채운다. 위 origin_m 은 못 찾을 때 예비값.
+  # 10/9 최종 배치: 골판지 상자 — 영상 왼쪽 UPPER(상), 오른쪽 MIDDLE(중) / 가운데 파란 트레이의 로봇 쪽 흰 종이 = REJECT
+  # (벽 없음), 아래 파란 부분 = 집는 영역.
+  # assign: {이름: 쪽} — 쪽은 left|right|top|bottom (카메라 영상) 또는 +x|-x|+y|-y (base). 대회장이 상·중을 반대로 정하면
+  # 이 한 줄만 바꾼다: {UPPER: right, MIDDLE: left}. 그 밖의 키(색 범위·크기·max_yaw_deg 등) 기본값은 코드 _DEFAULTS
+  auto_detect: {enabled: true, assign: {UPPER: left, MIDDLE: right}, flat_zone: REJECT}   # [실측 10/9 최종 배치]
+  # [현장 10/10 05:00] release_above_wall 끔·max_drop 0.10 → 0.03 원복: 벽 위에서 놓으면 6~11 cm 낙하로 사과가 상한다(팀 결정).
+  # 들고 벽을 넘어 상자 안으로 내려가 놓는다. 내려가는 동안 핑거–벽 충돌은 경로 검사가 상자 벽을 장애물로 넣어 본다
+  placement: {max_drop_m: 0.03, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near, release_above_wall: false}
+  poses:                        # 현장에서 텔레오퍼레이션으로 자세를 잡고 tools/teach_pose.py <이름> 으로 저장
+    home_joint_rad: [0.0, 0.0, 0.0, 0.0, 0.3971, 0.0] # [제안 10/9 — Studio 파킹 자세(INITIALIZE_POSITION), 접힌 자세라 탑뷰를 가리지 않음 — 역할 B 확인]
+    scan_joint_rad: [0.0, 0.0, 0.0, 0.0, 0.3971, 0.0] # [제안 10/9 — Studio 파킹 자세(INITIALIZE_POSITION), 접힌 자세라 탑뷰를 가리지 않음 — 역할 B 확인]
+    # 스크립트 + ACT (10/10): ACT ① 이 사과를 들고 멈추는 자세 → 스크립트가 등급 상자 위로 → ACT ② 가 아래 빈 칸에 놓는다
+    hold_joint_rad: [-0.06135, 1.44025, -1.91552, -0.00543, 0.5843, -0.11228] # [실측 10/10] ACT ① 끝 = 들고 있는 자세
+    hover_UPPER_joint_rad: [-0.66726, 1.54202, -1.42953, 0.03239, 0.6963, -0.2185] # [실측 10/10] 왼쪽 상자(UPPER) 위 — ACT ② 출발 자세
+    hover_MIDDLE_joint_rad: [0.51746, 1.46976, -1.42953, 0.34095, 0.7888, -0.42141] # [실측 10/10] 오른쪽 상자(MIDDLE) 위
+    hover_REJECT_joint_rad: [-0.10315, 0.69822, -0.72862, 0.08453, 0.92256, -0.09205] # [실측 10/10] 리젝트 종이 위

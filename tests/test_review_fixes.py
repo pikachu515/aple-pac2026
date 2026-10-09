@@ -208,7 +208,7 @@ def test_live_factory_checks_measurements_before_any_studio_construction(monkeyp
         pytest.fail('no robot/client construction allowed before preflight succeeds')
     monkeypatch.setattr(module, 'PiperStudio', forbidden)
     missing = missing_for_live_execution(load_config())
-    assert any('velocity_limits' in s for s in missing)
+    assert any('execution.motion' in s for s in missing)
     with pytest.raises(ValueError, match='configuration incomplete'):
         build_live_runtime(load_config(), forbidden, forbidden)
 

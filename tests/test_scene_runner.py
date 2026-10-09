@@ -4,7 +4,10 @@ M1 인식(#13)은 아직 main 에 없으므로 검출은 inspection.standalone(�
 합성 정답으로 대신한다. 로봇은 역할 B 의 RecordingMotionAdapter.
 """
 
+import copy
+import csv
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -121,6 +124,79 @@ def test_live_cycle_executes_and_records_targets(config):
         assert math.isfinite(r.planned_drop_m) and r.t_total_s >= 0
 
 
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry_run", "fake_execution"])
+def test_cycle_reservations_are_released_only_without_execution(config, dry_run):
+    adapter = RecordingMotionAdapter()
+    runner = runner_for(config, adapter)
+    cycles = 8 if dry_run else 2  # Eight dry cycles exceed the six cells per empty box.
+    records = manager(config, runner, Scene(), dry_run=dry_run).run(cycles)
+    first_targets = {r.apple_id: (r.target_box, r.target_cell) for r in records if r.cycle_index == 1}
+
+    assert len(records) == cycles * len(APPLES)
+    assert all(r.target_cell >= 0 and r.fail_stage == FailStage.NONE for r in records)
+    for row in records:
+        if row.cycle_index == 1:
+            continue
+        first_box, first_cell = first_targets[row.apple_id]
+        assert row.target_box == first_box
+        if dry_run:
+            assert row.target_cell == first_cell
+        else:
+            assert row.target_cell != first_cell  # Unverified executed cells stay reserved.
+    if dry_run:
+        assert adapter.calls == []
+    else:
+        assert adapter.calls and all(r.success for r in records)
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["planned", "executed"])
+def test_damage_fields_follow_work_item_and_survive_csv(config, tmp_path, dry_run):
+    """Verify the M5 → M4 → CSV contract with distinct planned/executed values."""
+    from aple.schema import ExecResult, Phase
+
+    # 힘 기록은 힘 보정 모드에서만 남는다 (#37: fixed_effort 는 실제 파지 힘을 모르므로 NaN)
+    config = copy.deepcopy(config)
+    config["execution"]["gripper"]["control_mode"] = "calibrated_force"
+
+    runner = runner_for(config, RecordingMotionAdapter())
+    snap = Scene()()
+    plan = runner.plan(snap)
+    original = next(it for it in plan.work.items if it.placement is not None)
+    planned = replace(
+        original, profile=replace(original.profile, grasp_force_n=3.5),
+        placement=replace(original.placement, planned_drop_m=0.012),
+    )
+    plan = replace(plan, work=replace(plan.work, items=(planned,)))
+    done = replace(
+        planned, profile=replace(planned.profile, grasp_force_n=6.25),
+        placement=replace(planned.placement, planned_drop_m=0.023),
+        execution=ExecResult(True, FailureCode.NONE, Phase.RETREAT),
+    )
+
+    def execute(scene_plan):
+        assert not dry_run, "dry-run must not execute"
+        return replace(scene_plan.work, items=(done,))
+
+    records = CycleManager(
+        config, capture=lambda: snap, dry_run_capture=lambda: snap,
+        plan_scene=lambda captured: plan, execute_scene=execute,
+        make_records=runner.records, dry_run=dry_run,
+    ).run(1)
+
+    assert len(records) == 1
+    expected_force, expected_drop = (3.5, 0.012) if dry_run else (6.25, 0.023)
+    row = records[0]
+    assert row.apple_id == original.apple.apple_id
+    assert row.grasp_force_set_n == pytest.approx(expected_force)
+    assert row.planned_drop_m == pytest.approx(expected_drop)
+    with (tmp_path / "cycles.csv").open(newline="", encoding="utf-8") as stream:
+        saved = list(csv.DictReader(stream))
+    assert len(saved) == 1
+    assert int(saved[0]["apple_id"]) == row.apple_id
+    assert float(saved[0]["grasp_force_set_n"]) == pytest.approx(expected_force)
+    assert float(saved[0]["planned_drop_m"]) == pytest.approx(expected_drop)
+
+
 def test_lighting_fault_holds_execution_and_asks_recalibration(config):
     adapter = RecordingMotionAdapter()
     runner = runner_for(config, adapter, light=FAULT)
@@ -131,6 +207,7 @@ def test_lighting_fault_holds_execution_and_asks_recalibration(config):
     records = manager(config, runner, Scene(), dry_run=False).run(1)
     assert adapter.calls == []                                          # 리젝트 상자로 보내지 않는다
     assert len(records) == 3 and all(not r.success and r.failure_code == FailureCode.ABORTED for r in records)
+    assert all(math.isnan(r.grasp_force_set_n) and math.isnan(r.planned_drop_m) for r in records)
 
 
 def test_empty_tray_records_one_row(config):

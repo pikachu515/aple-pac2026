@@ -102,12 +102,29 @@ class SceneRunner:
         if T.shape != (4, 4) or not np.all(np.isfinite(T)):
             raise ValueError("workcell.T_base_camera must be a finite 4x4 matrix")
         from aple.perception import box_occupancy, detector, grasp_planner, pose_estimator
-        return cls(cfg, pipeline,
-                   detect=lambda snap: detector.detect(snap, cfg),
-                   estimate_apples=lambda snap, dets, prev: pose_estimator.estimate(snap, dets, T, prev, cfg),
-                   estimate_boxes=lambda snap: box_occupancy.estimate(snap, T, cfg),
-                   plan_grasps=lambda apples: grasp_planner.plan_grasps(list(apples), cfg),
-                   **kwargs)
+        from aple.perception.workcell_detect import AutoWorkcell, auto_enabled
+        if not auto_enabled(cfg):
+            return cls(cfg, pipeline,
+                       detect=lambda snap: detector.detect(snap, cfg),
+                       estimate_apples=lambda snap, dets, prev: pose_estimator.estimate(snap, dets, T, prev, cfg),
+                       estimate_boxes=kwargs.pop("estimate_boxes", lambda snap: box_occupancy.estimate(snap, T, cfg)),
+                       plan_grasps=lambda apples: grasp_planner.plan_grasps(list(apples), cfg),
+                       **kwargs)
+        # workcell.auto_detect: 장면마다 상자·리젝트 구역·집는 영역을 카메라로 찾아 채운 설정 사본으로 검출·추정한다.
+        # plan() 은 detect 를 먼저 부르므로 그때 갱신한 설정을 같은 장면의 위치·상자·파지 추정이 쓴다.
+        auto = AutoWorkcell(cfg, T)
+
+        def detect(snap):
+            auto.update(snap)
+            return detector.detect(snap, auto.cfg)
+        runner = cls(cfg, pipeline,
+                     detect=detect,
+                     estimate_apples=lambda snap, dets, prev: pose_estimator.estimate(snap, dets, T, prev, auto.cfg),
+                     estimate_boxes=kwargs.pop("estimate_boxes", lambda snap: box_occupancy.estimate(snap, T, auto.cfg)),
+                     plan_grasps=lambda apples: grasp_planner.plan_grasps(list(apples), auto.cfg),
+                     **kwargs)
+        runner.auto_workcell = auto
+        return runner
 
     # ------------------------------------------------------------ CycleManager 단계
 

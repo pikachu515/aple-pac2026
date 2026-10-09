@@ -89,6 +89,8 @@ def cfg():
     config["safety"]["gripper_effort_max"] = 1000
     config["size_bins"]["force"]["mu"] = 0.5
     config["size_bins"]["force"]["f_bruise_n"] = 30.0
+    for b in config["size_bins"]["bins"]:
+        b["grasp_height_offset_mm"] = 0      # 파지 높이 = 적도 기준 테스트 — 현장 설정(10/10 +10 mm)과 무관하게 고정
     config["size_bins"]["gripper_calib"]["effort_to_force_table"] = [
         [0, 0.0],
         [5000, 50.0],

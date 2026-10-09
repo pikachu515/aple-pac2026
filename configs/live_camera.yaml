@@ -9,3 +9,13 @@ live_camera:
   max_skew_ms: 50                 # 컬러·깊이 프레임 시각 차 허용
   timeout_s: 2.0
   max_frame_age_s: 1.0           # 오래된 공유 메모리 프레임 거부. 촬영 요청 이후 노출된 프레임만 사용
+  # 깊이 거리 보정 (aple/hal/depth_correction.py) — 카메라마다 다르다. 실제 거리 = gain / (1/깊이 − offset_per_m)
+  # 10/7 D435i 243122071248: 0.74 m 에서 깊이가 45% 짧았다 → gain 1.038, offset_per_m 1.052 (카드 3거리, 오차 1.2% 이내)
+  # 10/8 이 카메라는 Tare 로 재보정해 카메라에 저장했다 (tools/rs_calibrate.py, 카드 오차 +0.8~1.7%) → 이 카메라는 1, 0 그대로
+  # 현장: 카메라 재보정(On-Chip + Tare) 뒤 tools/depth_check.py 로 회색 카드 거리를 확인하고, 2% 넘게 틀리면 fit 값을 넣는다
+  depth_correction:
+    gain: 1.0                     # [임시] 1 = 보정 안 함 — tools/depth_check.py 로 확인
+    offset_per_m: 0.0             # [임시] 0 = 배율만
+  depth_check:
+    card_mm: [130, 100]           # [실측 10/08] 회색 카드 긴 변·짧은 변 (자)
+    max_error: 0.02               # 카드 거리 상대 오차 허용 — 넘으면 재보정하거나 depth_correction 을 넣는다

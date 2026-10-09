@@ -67,6 +67,8 @@ def colored_mask(lab: np.ndarray, hue_range_deg: tuple[float, float], min_chroma
 # ---------------------------------------------------------------- 회색 카드
 
 TARGET_GRAY_SRGB = 118.0
+CARD_DEPTH_TOL_M = 0.01     # 기본값. 현장 값은 color.gray_card.depth_tol_m
+CARD_MIN_VISIBLE = 0.5
 
 
 @dataclass
@@ -75,13 +77,22 @@ class CardCalib:
     roi: tuple[int, int, int, int]       # x, y, w, h (px)
     rgb_gain: tuple[float, float, float] # 선형 공간 채널 게인
     card_ref_lab: tuple[float, float, float]   # 보정 전 카드 L*a*b* (조명 감시 기준)
+    # 카드 면 깊이 평면 (ROI 중심 깊이 m, 가로 기울기 m/px, 세로 기울기 m/px). 카메라가 기울어 있으면
+    # 평평한 카드도 화면 안에서 깊이가 변한다 (10/9 실측: 카드 폭 안에서 4 cm). 있으면 카드보다
+    # 카메라 쪽에 있는 픽셀(회색 핑거·팔)을 뺀다
+    card_plane: tuple[float, float, float] | None = None
 
     def to_dict(self) -> dict:
-        return {"roi": list(self.roi), "rgb_gain": list(self.rgb_gain), "card_ref_lab": list(self.card_ref_lab)}
+        d = {"roi": list(self.roi), "rgb_gain": list(self.rgb_gain), "card_ref_lab": list(self.card_ref_lab)}
+        if self.card_plane is not None:
+            d["card_plane"] = list(self.card_plane)
+        return d
 
     @staticmethod
     def from_dict(d: dict) -> "CardCalib":
-        return CardCalib(tuple(d["roi"]), tuple(d["rgb_gain"]), tuple(d["card_ref_lab"]))
+        plane = d.get("card_plane")
+        return CardCalib(tuple(d["roi"]), tuple(d["rgb_gain"]), tuple(d["card_ref_lab"]),
+                         None if plane is None else tuple(float(v) for v in plane))
 
 
 def _roi_pixels(img: np.ndarray, roi: tuple[int, int, int, int], trim: float = 0.15) -> np.ndarray:
@@ -91,9 +102,75 @@ def _roi_pixels(img: np.ndarray, roi: tuple[int, int, int, int], trim: float = 0
     return img[y + dy:y + h - dy, x + dx:x + w - dx].reshape(-1, img.shape[-1])
 
 
-def calibrate_card(bgr: np.ndarray, roi: tuple[int, int, int, int]) -> CardCalib:
-    """카드가 R=G=B 이면서 밝기가 18% 회색(sRGB ≈ 118)이 되게 하는 선형 채널 게인을 구한다."""
+def _roi_depth_uv(depth_m: np.ndarray, roi: tuple[int, int, int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """_roi_pixels 와 같은 순서의 (깊이, ROI 중심 기준 u, v)."""
+    x, y, w, h = roi
+    v, u = np.indices(depth_m.shape, dtype=np.float64)
+    uv = _roi_pixels(np.stack([u - (x + w / 2), v - (y + h / 2)], axis=-1), roi)
+    return _roi_pixels(depth_m[..., None], roi)[:, 0], uv[:, 0], uv[:, 1]
+
+
+#: 카드 ROI 에서 깊이가 있는 픽셀이 이 비율보다 적으면 깊이 평면 없이 보정한다
+CARD_MIN_DEPTH = 0.5
+
+
+def fit_card_plane(depth_m: np.ndarray, roi: tuple[int, int, int, int], tol_m: float = CARD_DEPTH_TOL_M,
+                   iters: int = 300, seed: int = 0) -> tuple[float, float, float]:
+    """카드 면 깊이 평면 (중심 깊이, du, dv) — RANSAC.
+
+    가리는 물체(핑거·팔)는 항상 카드보다 카메라 쪽이므로, 평면 **뒤**에 점이 많이 남는 후보는 카드가 아니다
+    (핑거 면에 맞추면 카드 점이 그 뒤에 남는다). 점수 = 면 위 점 수 − 3 × 면 뒤 점 수.
+    """
+    d, u, v = _roi_depth_uv(depth_m, roi)
+    ok = d > 0
+    d, u, v = d[ok], u[ok], v[ok]
+    if len(d) < 50:
+        raise ValueError("카드 영역에 깊이가 거의 없다 — 깊이 스트림·정렬 확인")
+    A = np.stack([np.ones_like(u), u, v], axis=1)
+    rng = np.random.default_rng(seed)
+    best, best_score = None, -np.inf
+    for _ in range(iters):
+        idx = rng.choice(len(d), 3, replace=False)
+        try:
+            c = np.linalg.solve(A[idx], d[idx])
+        except np.linalg.LinAlgError:
+            continue
+        r = d - A @ c
+        score = np.sum(np.abs(r) <= tol_m) - 3 * np.sum(r > tol_m)
+        if score > best_score:
+            best, best_score = c, score
+    inl = np.abs(d - A @ best) <= tol_m
+    c = np.linalg.lstsq(A[inl], d[inl], rcond=None)[0]
+    return float(c[0]), float(c[1]), float(c[2])
+
+
+def card_depth_mask(depth_m: np.ndarray, roi: tuple[int, int, int, int], plane: tuple[float, float, float],
+                    tol_m: float = CARD_DEPTH_TOL_M) -> np.ndarray:
+    """ROI 안쪽 픽셀 중 깊이가 카드 면 ± tol_m 인 것 (_roi_pixels 와 같은 순서). 깊이 결측(0)은 False.
+
+    회색 그리퍼는 색으로는 카드와 구분되지 않지만, 카드 위에 떠 있으므로 깊이가 카드보다 가깝다.
+    """
+    d, u, v = _roi_depth_uv(depth_m, roi)
+    return (d > 0) & (np.abs(d - (plane[0] + plane[1] * u + plane[2] * v)) <= tol_m)
+
+
+def calibrate_card(bgr: np.ndarray, roi: tuple[int, int, int, int], depth_m: np.ndarray | None = None, *,
+                   tol_m: float = CARD_DEPTH_TOL_M, min_visible: float = CARD_MIN_VISIBLE) -> CardCalib:
+    """카드가 R=G=B 이면서 밝기가 18% 회색(sRGB ≈ 118)이 되게 하는 선형 채널 게인을 구한다.
+
+    depth_m(컬러에 정렬)을 주면 카드 면 깊이 평면(fit_card_plane)을 함께 저장하고, 카드보다 앞에 있는
+    픽셀은 게인 계산에서 뺀다.
+    """
     lin = _roi_pixels(bgr_to_linear_rgb(bgr), roi)
+    plane = None
+    if depth_m is not None and (np.asarray(depth_m)[roi[1]:roi[1] + roi[3], roi[0]:roi[0] + roi[2]] > 0).mean() < CARD_MIN_DEPTH:
+        depth_m = None          # 10/10: 카드가 깊이 시야 밖(화면 가장자리) — 깊이 평면 없이 색만 보정 (가림 걸러내기 없음)
+    if depth_m is not None:
+        plane = fit_card_plane(depth_m, roi, tol_m)
+        on_card = card_depth_mask(depth_m, roi, plane, tol_m)
+        if on_card.mean() < min_visible:
+            raise ValueError(f"카드가 {1 - on_card.mean():.0%} 가려져 있다 — 그리퍼·팔을 치우고 다시 찍는다")
+        lin = lin[on_card]
     lin = lin[(lin.max(axis=1) < 0.98) & (lin.min(axis=1) > 0.005)]   # 포화·암부 제외
     if len(lin) < 50:
         raise ValueError("카드 영역에 유효 픽셀이 부족하다 — ROI 위치 또는 노출 확인")
@@ -101,7 +178,8 @@ def calibrate_card(bgr: np.ndarray, roi: tuple[int, int, int, int]) -> CardCalib
     target = float(srgb_to_linear(TARGET_GRAY_SRGB / 255.0))
     gain = target / mean
     ref = linear_rgb_to_lab(mean)
-    return CardCalib(tuple(int(v) for v in roi), tuple(float(g) for g in gain), tuple(float(v) for v in ref))
+    return CardCalib(tuple(int(v) for v in roi), tuple(float(g) for g in gain), tuple(float(v) for v in ref),
+                     plane)
 
 
 def apply_gain(bgr: np.ndarray, calib: CardCalib | None) -> np.ndarray:
@@ -117,12 +195,21 @@ def card_brightness(bgr: np.ndarray, roi: tuple[int, int, int, int]) -> float:
     return float(np.median(_roi_pixels(bgr.astype(np.float64), roi)))
 
 
-def lighting_status(bgr_raw: np.ndarray, calib: CardCalib, warn: float = 2.5, fault: float = 6.0) -> LightingStatus:
+def lighting_status(bgr_raw: np.ndarray, calib: CardCalib, warn: float = 2.5, fault: float = 6.0,
+                    depth_m: np.ndarray | None = None, *, tol_m: float = CARD_DEPTH_TOL_M,
+                    min_visible: float = CARD_MIN_VISIBLE) -> LightingStatus:
     """보정 시점 대비 카드 색 변화(ΔE*ab, CIE76)로 조명 변화를 판정한다.
 
     설계서는 ΔE00 을 쓰지만, 같은 카드의 작은 변화를 보는 용도에서는 CIE76 으로 충분하다.
+    calib.card_plane 과 depth_m 이 있으면 카드 면 픽셀만 쓴다. 보이는 카드가 min_visible 미만이면
+    가려진 것으로 보고 card_valid=False (FAULT) — 조명 변화로 오인하지 않게, 처리는 호출 쪽(CardMonitor)이 정한다.
     """
     lin = _roi_pixels(bgr_to_linear_rgb(bgr_raw), calib.roi)
+    if calib.card_plane is not None and depth_m is not None:
+        on_card = card_depth_mask(depth_m, calib.roi, calib.card_plane, tol_m)
+        if on_card.mean() < min_visible:
+            return LightingStatus(LightState.FAULT, float("nan"), False)
+        lin = lin[on_card]
     ok = (lin.max(axis=1) < 0.98) & (lin.min(axis=1) > 0.005)
     if ok.sum() < 50:
         return LightingStatus(LightState.FAULT, float("nan"), False)

@@ -13,7 +13,8 @@ from aple.schema import AppleDetection2D, CaptureMode, LightState, RejectReason,
 from tests.synthetic import INTR, Apple, blush, render
 from tests.test_inspection import CARD_ROI, P
 
-GC = load_config()["color"]["gray_card"]
+# 장면(ΔE ≈ 7.6 조명 변화)은 설계 기준 FAULT 6 으로 만들었다 — 현장 설정(10/10 깜빡임 때문에 12)과 무관하게 고정
+GC = {**load_config()["color"]["gray_card"], "delta_e_fault": 6.0}
 PATCHES = [((110, 20, 60, 60), (180, 40, 40)),      # 적
            ((190, 20, 60, 60), (210, 190, 70)),     # 황
            ((270, 20, 60, 60), (200, 200, 200))]    # 백

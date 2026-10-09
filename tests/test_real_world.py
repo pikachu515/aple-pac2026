@@ -55,6 +55,7 @@ def test_fingers_turn_away_from_close_neighbour(cfg):
 
 
 def test_crowded_apple_is_not_collision_free(cfg):
+    cfg["grasp_planner"]["min_clearance_m"] = 0.0     # 간격 0 기준 판정 원리 — 현장 설정(10/10 이웃 사과 -12 mm 허용)과 무관하게 고정
     ring = [apple(1, 0.3, 0.0)] + [apple(k + 2, 0.3 + 0.075 * math.cos(t), 0.075 * math.sin(t))
                                    for k, t in enumerate(np.linspace(0, 2 * math.pi, 6, endpoint=False))]
     g = {c.apple_id: c for c in grasp_planner.plan_grasps(ring, cfg)}

@@ -95,6 +95,33 @@ class _EstopKeepAlive:
             raise PiperWebError("Piper Web did not confirm its E-stop heartbeat")
 
 
+#: 관절 목표가 Studio 범위 밖으로 이만큼(°)까지는 경계로 자른다. 더 벗어나면 거부한다
+LIMIT_EDGE_DEG = 5.0
+
+#: 측정 속도 = 관절 변화 / max(읽기 간격, 이 값). 관절값에 로봇 쪽 시각이 없어 연달아 읽으면 속도가 부푼다
+VELOCITY_MIN_WINDOW_S = 0.1
+
+#: 도착을 기다리는 동안 같은 목표를 이 간격으로 다시 보낸다 — robotd 데드맨(500 ms)보다 충분히 짧게
+GOAL_RESEND_S = 0.2
+
+#: 조그 세션을 끝낸 뒤 이만큼 지나야 새 세션의 명령이 robotd 에 들어간다 (10/10 실기·재현: 0.5 s 만에 다시 열면 그리퍼만
+#: 닫는 세션이 6 s 동안 데드맨으로 묶여 안 닫혔고, 6 s 뒤에 열면 0.3 s 만에 닫혔다. Piper v0.5.7 의 '5 s 안에 쓴 명령
+#: 세그먼트는 넘기지 않는다'와 같은 값). 목표가 계속 바뀌는 팔 궤적은 결국 따라가지만, 목표 하나뿐인 그리퍼 명령은 잃는다
+JOG_HANDOVER_S = 5.5
+_LAST_JOG_STOP = [0.0]   # 마지막 조그 종료 시각 (time.monotonic) — 객체가 여러 개여도 robotd 는 하나다
+
+
+def _arrival_gap(current, target_rad, gripper_position, target) -> str:
+    """도착 대기 시간 초과 때 어디서 멈췄는지 — robotd 바닥 필터·관절 범위가 목표를 줄였는지, 덜 따라왔는지 가린다."""
+    errors = [abs(a-b) for a, b in zip(current, target_rad)]
+    worst = max(range(len(errors)), key=errors.__getitem__)
+    text = (f"(worst joint{worst+1} {math.degrees(errors[worst]):.1f}° off; per joint °: "
+            + ", ".join(f"{math.degrees(e):.1f}" for e in errors))
+    if target.get("gripper") is not None:
+        text += f"; gripper {gripper_position:.1f} vs {target['gripper']:.1f}"
+    return text + ")"
+
+
 class PiperStudio:
     """Synchronous jog client requiring v0.5.12 torque readback for control."""
 
@@ -374,8 +401,16 @@ class PiperStudio:
             intervals_s=tuple(intervals),
             velocity_limits_rad_s=tuple(v*speed_scale for v in limits.velocity_rad_s),
             tracking_tolerance_rad=limits.tracking_tolerance_rad,
+            tracking_lag_s=getattr(limits, 'tracking_lag_s', 0.5),
             velocity_tolerance_rad_s=limits.velocity_tolerance_rad_s,
             gripper_width_watch=gripper_width_watch)
+
+    def wait_jog_handover(self) -> None:
+        """그리퍼만 움직이는 세션 전에: 직전 조그 세션이 끝나고 JOG_HANDOVER_S 가 지날 때까지 기다린다."""
+        remaining = _LAST_JOG_STOP[0] + JOG_HANDOVER_S - time.monotonic()
+        if remaining > 0:
+            _LOG.info("gripper-only jog: waiting %.1f s for robotd to accept a new session", remaining)
+            time.sleep(remaining)
 
     def close_for_grasp(self, diameter_m, effort, *, timeout_s):
         """Accept settled contact before the inward goal; verify fruit after lifting."""
@@ -389,6 +424,7 @@ class PiperStudio:
         positive(settings.get('contact_stability_m'), 'contact_stability_m')
         if effort != self._expected_gripper_effort:
             raise PiperWebError('command effort must match execution.gripper.fixed_effort')
+        self.wait_jog_handover()
         goal = self._normalize_joint_target(self.joint_state())
         goal['gripper'] = self._normalize_gripper_width(diameter_m-compression)
         self._move_sequence_to_normalized((goal,), timeout_s, grasp_diameter_m=diameter_m)
@@ -399,7 +435,7 @@ class PiperStudio:
         targets: tuple[dict[str, float], ...],
         timeout_s: float,
         *, intervals_s=None, velocity_limits_rad_s=None,
-        tracking_tolerance_rad=None, velocity_tolerance_rad_s=None,
+        tracking_tolerance_rad=None, velocity_tolerance_rad_s=None, tracking_lag_s=0.5,
         grasp_diameter_m=None, gripper_width_watch=None,
     ) -> None:
         timeout_s = self._positive_number(timeout_s, "timeout_s")
@@ -425,13 +461,20 @@ class PiperStudio:
                 previous, _ = self._read_raw_state()
                 sampled_at = time.monotonic()
                 last_sent = sampled_at
+                # 추종 오차의 기준: 최근 tracking_lag_s 안에 보낸 목표들 (+ 그 직전 목표). 방금 보낸 목표 하나와만
+                # 비교하면 로봇은 늘 한 스텝 + 응답 지연만큼 뒤에 있어 정상 이동도 멈췄다 (10/10 실기)
+                sent = [(sampled_at, previous)]
                 last_width, stable_since = None, sampled_at
                 def sample_checked():
                     nonlocal previous, sampled_at
                     state = self._read_raw_state()
                     now = time.monotonic()
                     if velocity_limits_rad_s is not None and now > sampled_at:
-                        if any(abs(a-b)/(now-sampled_at) > v+velocity_tolerance_rad_s
+                        # 관절값에는 로봇 쪽 시각이 없다 — 두 HTTP 읽기 사이 시간으로 나눈다. 목표 전송 직후처럼
+                        # 몇 ms 만에 다시 읽으면 그 사이 몰려 갱신된 변화가 아주 작은 시간으로 나뉘어 속도가 부풀었다
+                        # (10/10 실기 'measured joint velocity exceeded' 오판). 나누는 시간에 하한을 둔다
+                        window = max(now-sampled_at, VELOCITY_MIN_WINDOW_S)
+                        if any(abs(a-b)/window > v+velocity_tolerance_rad_s
                                for a, b, v in zip(state[0], previous, velocity_limits_rad_s)):
                             raise PiperWebError('measured joint velocity exceeded the configured limit')
                     if gripper_width_watch is not None:
@@ -470,17 +513,32 @@ class PiperStudio:
                     if last_sent >= deadline:
                         raise PiperWebError('Timed out waiting for trajectory: goal acknowledgment')
                     target_rad = self._denormalize_joint_target(target)
+                    sent.append((last_sent, target_rad))
+                    while len(sent) > 2 and sent[1][0] < last_sent - tracking_lag_s:
+                        sent.pop(0)
                     if intervals_s is not None and index < len(targets)-1:
                         current, _ = sample_checked()
-                        if any(abs(a-b) > tracking_tolerance_rad for a, b in zip(current, target_rad)):
-                            raise PiperWebError('timed trajectory tracking error exceeded the configured limit')
+                        error = min(max(abs(a-b) for a, b in zip(current, ref)) for _, ref in sent)
+                        if error > tracking_tolerance_rad:
+                            raise PiperWebError(
+                                'timed trajectory tracking error exceeded the configured limit '
+                                f'({math.degrees(error):.1f}° from every goal sent in the last {tracking_lag_s:.2f} s)')
                         continue
                     while True:
                         keepalive.check()
                         self.verify_gripper_torque()
+                        if time.monotonic() - last_sent >= GOAL_RESEND_S:
+                            # robotd 데드맨: 명령이 500 ms 끊기면 그 자리에 세운다. 목표를 한 번만 보내고 기다리면
+                            # 0.5 s 넘게 걸리는 그리퍼 닫기·마지막 접근이 도중에 멈췄다 (10/10 실기: 그리퍼 70.9 % 에서 정지)
+                            resent = self._request("POST", "/api/robots/jog/goal",
+                                                   {"iface": self._iface, "values": target})
+                            if not isinstance(resent, dict) or resent.get("status") != "ok":
+                                raise PiperWebError("Piper Web did not confirm the repeated joint goal")
+                            last_sent = time.monotonic()
                         current, gripper_position = sample_checked()
                         if time.monotonic() >= deadline:
-                            raise PiperWebError("Timed out waiting for trajectory: arrival feedback")
+                            raise PiperWebError("Timed out waiting for trajectory: arrival feedback "
+                                                + _arrival_gap(current, target_rad, gripper_position, target))
                         joints_reached = all(
                             abs(actual - expected) <= self._arrival_tolerance_rad
                             for actual, expected in zip(current, target_rad)
@@ -508,7 +566,8 @@ class PiperStudio:
                         if remaining_s <= 0:
                             raise PiperWebError(
                                 f"Timed out waiting for Piper Web follower {self._iface!r} "
-                                "to reach the joint goal sequence"
+                                "to reach the joint goal sequence "
+                                + _arrival_gap(current, target_rad, gripper_position, target)
                             )
                         time.sleep(min(self._poll_interval_s, remaining_s))
             except Exception as exc:
@@ -519,6 +578,7 @@ class PiperStudio:
                 if started:
                     try:
                         stop_result = self._request("POST", "/api/robots/jog/stop", {})
+                        _LAST_JOG_STOP[0] = time.monotonic()
                         if not isinstance(stop_result, dict) or stop_result.get("status") != "stopped":
                             raise PiperWebError("Piper Web did not confirm that jog stopped")
                     except Exception as stop_error:
@@ -601,8 +661,11 @@ class PiperStudio:
                     or lower_deg >= upper_deg):
                 raise ValueError(f"piper_web joint limits for {name} are invalid")
             degrees = math.degrees(value)
-            if degrees < lower_deg or degrees > upper_deg:
+            if degrees < lower_deg - LIMIT_EDGE_DEG or degrees > upper_deg + LIMIT_EDGE_DEG:
                 raise ValueError(f"{name} target is outside configured Piper Web joint limits")
+            # 경계 바로 밖은 경계로 — robotd 도 같은 값으로 자른다. 10/10 실기: 접힌 자세(2축 -1.6°, 3축 +2.4°)에서
+            # 출발하는 궤적의 첫 점이 Studio 범위(2축 0°, 3축 0°) 밖이라 접힌 자세로 가는 이동조차 거부됐다
+            degrees = min(max(degrees, lower_deg), upper_deg)
             normalized[name] = (degrees - lower_deg) * 200.0 / (upper_deg - lower_deg) - 100.0
         return normalized
 
@@ -817,6 +880,9 @@ class PiperStudioMotionTransport:
         self, width_m: float, effort: int, *, timeout_s: float
     ) -> bool:
         self._held_width_m = None
+        wait = getattr(self._studio, 'wait_jog_handover', None)
+        if callable(wait):
+            wait()                                   # 그리퍼만 여닫는 세션 — 조그 인계 대기 (JOG_HANDOVER_S)
         joints = self._studio.joint_state()
         self._studio.send(
             ArmCommand(joints, width_m, effort, "scripted"),

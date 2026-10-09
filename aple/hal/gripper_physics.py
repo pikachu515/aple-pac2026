@@ -205,6 +205,7 @@ def physics_scene(cfg, assumptions):
     inspection = cfg['simulation'].get('in_hand_scene')
     if inspection:
         scene['cameras']['top']['z'] = inspection['camera_height_m']
+    if inspection and inspection.get('inspection_marker', True):
         scene['objects'].append(dict(id='aple_inspection_center', label='INSPECTION CENTER',
             shape='cylinder', size=[inspection['inspection_clear_radius_m'], .0005],
             pos=[*inspection['inspection_center_m'][:2], .0005], movable=False,

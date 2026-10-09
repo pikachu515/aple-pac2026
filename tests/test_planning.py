@@ -79,6 +79,11 @@ def cfg():
     config["safety"]["gripper_effort_max"] = 1000
     config["size_bins"]["force"]["mu"] = 0.5
     config["size_bins"]["force"]["f_bruise_n"] = 30.0
+    for b in config["size_bins"]["bins"]:
+        b["grasp_height_offset_mm"] = 0      # 파지 높이 = 적도 기준 테스트 — 현장 설정(10/10 +10 mm)과 무관하게 고정
+    # 일반 놓기 규칙(칸 바닥 위 release_gap, 낙하 ≤ 3 cm)을 검사한다 — 현장 설정(10/10 release_above_wall,
+    # max_drop_m 0.10)과 무관하게 고정. 벽 위에서 놓기는 아래 test_release_above_wall_* 가 따로 본다
+    config["workcell"]["placement"].update(max_drop_m=0.03, release_above_wall=False)
     config["size_bins"]["gripper_calib"]["effort_to_force_table"] = [
         [0, 0.0],
         [5000, 50.0],
@@ -385,7 +390,7 @@ def test_act_timeout_is_applied_without_exceeding_phase_a_limit(cfg):
 
     assert adapter.calls[0][1]["timeout_s"] == 12.0
 
-    cfg["execution"]["act"]["timeout_s"] = 45.0
+    cfg["execution"]["act"]["timeout_s"] = cfg["execution"]["timeouts"]["phase_a_s"] + 30.0   # phase A 한계보다 길게
     adapter.calls.clear()
     MotionExecutor(adapter, cfg).pick_place(apple(), profile(), grasp_candidate(), plan, backend="act")
 
@@ -593,3 +598,21 @@ def test_verify_placement_rejects_occupancy_from_another_box(cfg):
         planner.verify(plan, apple(), other_box, other_box)
 
     assert (int(plan.box_id), plan.cell_index) in planner.reserved
+
+
+def test_release_above_wall_lifts_release_to_wall_top(cfg):
+    """10/10 현장: 칸(9 cm)이 핑거 벌림보다 좁아 벽 위에서 놓는다 — 낙하 ≈ 벽 높이."""
+    cfg["workcell"]["placement"].update(max_drop_m=0.12, release_above_wall=True)    # 테스트 상자 벽 0.10 m
+    planner = PlacementPlanner(cfg)
+    plan = planner.plan(apple(), grade(), [_box([0.0, 0.0, 0.0])])         # 벽 0.1 m, 칸 바닥 0
+    r, gap = 0.078 / 2, cfg["workcell"]["placement"]["release_gap_m"]
+    assert plan.feasible
+    assert plan.release_z_m == pytest.approx(0.1 + r + gap)
+    assert plan.planned_drop_m == pytest.approx(0.1 + gap)
+    assert plan.hover_z_m >= plan.release_z_m
+
+
+def test_release_above_wall_still_respects_max_drop(cfg):
+    cfg["workcell"]["placement"].update(max_drop_m=0.05, release_above_wall=True)
+    plan = PlacementPlanner(cfg).plan(apple(), grade(), [_box([0.0, 0.0, 0.0])])
+    assert plan.feasible is False

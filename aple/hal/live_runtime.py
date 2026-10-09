@@ -60,9 +60,11 @@ def missing_for_live_execution(config):
         check('inspection.views.center_m', lambda: vector(cfg['inspection']['views']['center_m'], 3))
     for key in ('sample_step_rad', 'wall_thickness_m'):
         check('safety.segment_validation.'+key, lambda key=key: positive(settings.get(key), key))
-    check('workcell.tray.center_m', lambda: vector(work['tray'].get('center_m'), 3))
-    for name, box in work['boxes'].items():
-        check('workcell.boxes.'+name+'.origin_m', lambda box=box: vector(box.get('origin_m'), 3))
+    from aple.perception.workcell_detect import auto_enabled
+    if not auto_enabled(cfg):                          # auto_detect 면 장면마다 카메라로 찾는다 (예비값은 선택)
+        check('workcell.tray.center_m', lambda: vector(work['tray'].get('center_m'), 3))
+        for name, box in work['boxes'].items():
+            check('workcell.boxes.'+name+'.origin_m', lambda box=box: vector(box.get('origin_m'), 3))
     for name in ('home', 'scan'):
         check('workcell.poses.'+name, lambda name=name: vector(work['poses'].get(name+'_joint_rad'), 6))
     web = cfg['piper_web']
@@ -123,6 +125,22 @@ class LiveRuntime:
     pipeline: object
     runner: object
     capture: object
+
+
+def recovery_scene_ready(guard, joints, apples, boxes, *, target_apple_id):
+    """APPROACH/DESCEND 실패 뒤 scan 으로 물러나기 전에 충돌 검사 장면을 다시 세운다. → 출발 자세가 안전하면 True.
+
+    모든 사과를 장애물로 넣는 것이 기본이다. 그런데 팔은 방금 집으려던 사과 바로 옆(집기 전 자세)에 멈춰 있어서,
+    그 사과까지 넣으면 출발 자세부터 충돌로 판정돼 어떤 경로도 나갈 수 없다 (10/10 실기: IK_FAIL·COLLISION 직후
+    0.1~1.6 s 만에 'scan pose could not be reached safely' 로 정지). 그때만 그 사과 하나를 빼고, 다른 사과와 상자 벽은
+    그대로 둔다. 그래도 출발 자세가 막혀 있으면 False — 운영자 확인으로 넘긴다.
+    """
+    guard.clear_payload()
+    guard.update_scene(apples, boxes, target_apple_id=None)
+    if guard.is_segment_safe(joints, joints):
+        return True
+    guard.update_scene(apples, boxes, target_apple_id=target_apple_id)
+    return bool(guard.is_segment_safe(joints, joints))
 
 
 def build_live_runtime(config, capture, light_for):
@@ -194,9 +212,8 @@ def build_live_runtime(config, capture, light_for):
         joints = studio.joint_state()
         if len(joints) != 6 or not np.isfinite(joints).all():
             return False
-        guard.clear_payload()
-        guard.update_scene(observed_scene['apples'], observed_scene['boxes'], target_apple_id=None)
-        return True
+        return recovery_scene_ready(guard, joints, observed_scene['apples'], observed_scene['boxes'],
+                                    target_apple_id=item.apple.apple_id)
     def observe_drop():
         # Read-only observation; the arm has not yet been cleared out of view.
         return replace(safe_snapshot(), tray_clear=False)

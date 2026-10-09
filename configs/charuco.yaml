@@ -1,0 +1,18 @@
+# ChArUco 보드 (aple/hal/charuco.py, tools/charuco_calib.py) — 역할 A
+# 인쇄물 charuco_A4.pdf: 7×5 칸, 설계 칸 35 mm · 마커 26 mm, DICT_4X4_100, 마커 ID 0~16
+# 실제 크기 = 설계 크기 × print_scale. 인쇄 배율이 100% 가 아니어도 배율만 정확히 재면 된다.
+# 보드를 다시 인쇄하면 100 mm 눈금을 자로 재서 print_scale 을 바꾼다 (100% 인쇄면 1.0).
+charuco:
+  dictionary: DICT_4X4_100
+  squares_x: 7
+  squares_y: 5
+  design_square_length_m: 0.035
+  design_marker_length_m: 0.026
+  print_scale: 0.81               # [실측 10/09] 100 mm 눈금 = 81 mm. 교차 확인: 칸 ≈ 28 mm, 마커 둘레 흰 테두리 ≈ 3.5 mm
+  legacy_pattern: false           # OpenCV 4.6 이후 배치. 5행(홀수)이라 옛 배치와 같다
+  min_corners: 6                  # 자세 계산에 쓸 내부 모서리 최소 수 (전체 24개)
+  max_reproj_px: 1.0              # 재투영 RMS 가 이보다 크면 경고 (흐림·구김·배율 오류 의심)
+  handeye:                        # 보드를 그리퍼에 물린 eye-to-hand 캘리브레이션
+    min_samples: 10
+    max_spread_m: 0.003           # 표본마다 계산한 그리퍼↔보드 위치 편차 허용
+    max_spread_deg: 1.0           # 같은 회전 편차 허용

@@ -117,7 +117,7 @@ def test_full_scale_still_obeys_individual_velocity_and_acceleration_limits():
     assert goals[-1].time_s < slow[-1].time_s
 
 
-@pytest.mark.parametrize('scale', [True, math.nan, 1.1, .4])
+@pytest.mark.parametrize('scale', [True, math.nan, 1.1, 0.0, -.1])
 def test_invalid_empty_speed_is_rejected(scale):
     a, transport, guard = make_adapter()
     cfg = copy.deepcopy(a._cfg)
@@ -140,3 +140,12 @@ def test_inspection_pick_uses_empty_approach_then_normal_lift():
     close = max(i for i,c in enumerate(transport.calls) if c[0] == 'gripper')
     assert all(c[2] == .5 for c in transport.calls[close+1:] if c[0] == 'move')
     assert guard.calls
+
+
+def test_empty_speed_may_be_slower_than_normal_limit():
+    a, transport, guard = make_adapter()
+    cfg = copy.deepcopy(a._cfg)
+    cfg['execution']['motion'] = {'empty_speed_scale': .4}                 # 10/10 현장: 첫 실기는 느리게
+    slow = PiperTrajectoryMotionAdapter(transport, cfg, FakeIK(), guard)
+    slow._load_state = 'empty'
+    assert slow._empty_transit_speed(float(cfg['safety']['speed_scale_max'])) == pytest.approx(.4)

@@ -53,6 +53,8 @@ def preflight(cfg: dict) -> list[str]:
 
 def support_height_check(snap: SceneSnapshot, cfg: dict, dets) -> str | None:
     """사과·상자 밖 받침면 높이 (base z 중앙값) 가 트레이 높이와 1 cm 넘게 다르면 캘리브레이션을 의심한다."""
+    from aple.hal.depth_correction import DepthCorrection
+    snap = DepthCorrection.from_cfg(cfg).snapshot(snap)
     T = T_from_cfg(cfg)
     roi = detector.work_roi(snap, cfg)
     for d in dets:

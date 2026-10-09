@@ -11,6 +11,10 @@ simulation:
     - {center_m: [0.30, -0.10, 0.032], radius_m: 0.032, red_fraction: 0.1}
     - {center_m: [0.30, 0.0, 0.032], radius_m: 0.032, red_fraction: 0.5}
     - {center_m: [0.30, 0.10, 0.032], radius_m: 0.032, red_fraction: 0.9}
+color:
+  card_json: null   # 합성 장면에는 회색 카드가 없다 — 현장 card.json 을 쓰면 조명 이상으로 전부 중단된다
+live_camera:
+  depth_correction: {gain: 1.0, offset_per_m: 0.0}   # 합성 깊이는 정확하다 — 실물 카메라 보정을 적용하지 않는다
 workcell:
   tcp_offset_m: [0, 0, 0.16]
   T_base_camera: [[1, 0, 0, 0.25], [0, -1, 0, 0], [0, 0, -1, 0.65], [0, 0, 0, 1]]
@@ -38,6 +42,7 @@ grasp_planner:
   yaw_step_deg: 180
 execution:
   default_backend: scripted
+  transfer: {height_m: null}  # 기존 가상 셀은 이송면 경로 없이 (색 분류 시험은 실기 값을 따로 적용)
   motion:
     empty_speed_scale: null # Baseline virtual transport keeps its ordinary speed cap.
 inspection:

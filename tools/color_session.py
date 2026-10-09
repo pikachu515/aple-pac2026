@@ -117,17 +117,23 @@ GRADE_EN = {Grade.UPPER: "UPPER", Grade.MIDDLE: "MIDDLE", Grade.REJECT: "REJECT"
 
 def cmd_card(folder: Path, roi_arg: str | None, file_arg: str | None) -> CardCalib:
     snaps = load_snaps(folder)
-    path, color = (Path(file_arg), np.load(file_arg)["color"]) if file_arg else (snaps[0][0], snaps[0][1])
+    if file_arg:
+        with np.load(file_arg) as z:
+            path, color, depth = Path(file_arg), z["color"], z["depth_m"] if "depth_m" in z else None
+    else:
+        path, color, depth = snaps[0][0], snaps[0][1], snaps[0][2]
     if roi_arg:
         roi = tuple(int(v) for v in roi_arg.split(","))
     else:
         r = cv2.selectROI("drag gray card, then ENTER", color, showCrosshair=False)
         cv2.destroyAllWindows()
         roi = tuple(int(v) for v in r)
-    calib = calibrate_card(color, roi)
+    calib = calibrate_card(color, roi, depth)   # 깊이로 카드 면을 저장 — 회색 그리퍼가 카드 위에 와도 구분한다
     (folder / "card.json").write_text(json.dumps(calib.to_dict(), indent=2), encoding="utf-8")
     print(f"기준 사진 {path.name}, 카드 영역 {roi}")
     print(f"카드 밝기 {card_brightness(color, roi):.0f} (118 근처가 좋다. 200 이상이면 노출 과다, 60 이하면 부족)")
+    if calib.card_depth_m is not None:
+        print(f"카드 면 깊이 {calib.card_depth_m * 1000:.0f} mm (이보다 가까운 픽셀은 카드로 치지 않는다)")
     print(f"채널 게인 R {calib.rgb_gain[0]:.2f}  G {calib.rgb_gain[1]:.2f}  B {calib.rgb_gain[2]:.2f}")
     print(f"저장: {folder / 'card.json'}")
     return calib
@@ -139,7 +145,11 @@ PATCH_NAMES = ("red", "yellow", "white")
 def cmd_patches(folder: Path, roi_args: list[str] | None, file_arg: str | None) -> PatchCalib:
     """레퍼런스 패치 기준 색 → folder/patch.json. 카드(card.json)가 있으면 4번째 패치로 함께 넣는다."""
     snaps = load_snaps(folder)
-    path, color = (Path(file_arg), np.load(file_arg)["color"]) if file_arg else (snaps[0][0], snaps[0][1])
+    if file_arg:
+        with np.load(file_arg) as z:
+            path, color, depth = Path(file_arg), z["color"], z["depth_m"] if "depth_m" in z else None
+    else:
+        path, color, depth = snaps[0][0], snaps[0][1], snaps[0][2]
     rois: dict[str, tuple[int, int, int, int]] = {}
     if roi_args:
         for item in roi_args:

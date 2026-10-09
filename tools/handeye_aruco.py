@@ -1,26 +1,30 @@
-"""카메라–로봇 변환 자동 캘리브레이션 — 그리퍼에 붙인 ArUco 마커를 탑뷰 카메라로 찍는다 (eye-to-hand, 역할 A).
+"""카메라–로봇 변환 자동 캘리브레이션 — 그리퍼에 붙인 ArUco 보드(또는 마커)를 탑뷰 카메라로 찍는다 (eye-to-hand, 역할 A).
 
 touch_calib 은 사람이 끝점을 표식에 대야 해서 14 cm 그리퍼에서는 손목 각도·누르는 힘에 cm 단위로 흔들렸다
-(10/9 실기 RMS 5~47 mm). 이 도구는 마커를 카메라가 자동으로 찾고, 같은 순간의 관절각으로 플랜지 자세를
-구해 짝지어 푼다. 끝점에 댈 필요도, TCP 오프셋을 알 필요도 없다 (마커 ↔ 플랜지 변환도 같이 풀린다).
+(10/9 실기 RMS 5~47 mm). 이 도구는 표적을 카메라가 자동으로 찾고, 같은 순간의 관절각으로 플랜지 자세를
+구해 짝지어 푼다. 끝점에 댈 필요도, TCP 오프셋을 알 필요도 없다 (표적 ↔ 플랜지 변환도 같이 풀린다).
 
-준비물
-- tools 로 만든 A4 마커 (data/calib/aruco_markers_A4.pdf, DICT_4X4_50). id 0 = 60 mm, id 1 = 45 mm.
-  '실제 크기(100%)' 로 인쇄하고 검은 사각형 한 변을 자로 재서 --marker-mm 로 준다.
-- 마커를 그리퍼/손목 윗면에 **움직이지 않게** 붙인다 (평평한 판에 붙인 뒤 테이프). 흰 여백을 자르지 않는다.
+표적 (기본: 보드)
+- **ArUco GridBoard 2×2** (DICT_4X4_50, id 10~13, 마커 35 mm, 간격 8 mm → 약 78 mm 정사각형). 모서리 16개를
+  한 번에 쓰므로 마커 하나(모서리 4개)보다 자세 추정이 안정적이고, 하나가 가려지거나 반사돼도 나머지로 잡힌다
+  (자세마다 마커 2개 이상 필요).
+       python tools/handeye_aruco.py board-pdf --out ~/Desktop/aruco_board_A4.pdf     # A4 실제 크기 PDF
+  '실제 크기(100%)' 로 인쇄하고 마커 한 변을 자로 재서 --board-marker-mm (·--board-sep-mm) 로 준다.
+- 마커 하나만 쓸 때: --marker-id 0 --marker-mm 60 (data/calib/aruco_markers_A4.pdf). --board 와 같이 쓸 수 없다.
+- 표적을 그리퍼/손목 윗면에 **움직이지 않게** 붙인다 (평평한 판에 붙인 뒤 테이프). 흰 여백을 자르지 않는다.
 
 절차 (Piper Studio 켠 채, 팔로워는 리더암 텔레오퍼레이션으로 움직인다)
   1. 자세마다 Enter — 스냅샷 + 관절각을 함께 기록한다 (10~15 자세)
        python tools/handeye_aruco.py capture --session data/calib/handeye.json --iface can_follower \\
-           --marker-id 0 --marker-mm 60
+           --board 2x2 --board-marker-mm 35 --board-sep-mm 8 --board-first-id 10
      키: Enter = 기록   u = 마지막 자세 취소   q = 끝 (기록할 때마다 저장된다)
      요령: 작업 영역 전체로 위치를 옮기고, 손목을 ±30° 여러 방향으로 기울이고 돌린다 (회전 폭 30° 이상).
-           마커는 늘 탑뷰 카메라에 보여야 한다. 팔이 멈춘 뒤 Enter.
+           표적은 늘 탑뷰 카메라에 보여야 한다. 팔이 멈춘 뒤 Enter. 표적 설정은 세션에 남아 fit·check 가 그대로 쓴다.
   2. 맞추고 점검한 뒤 저장한다
        python tools/handeye_aruco.py fit --session data/calib/handeye.json                       # 결과만
        python tools/handeye_aruco.py fit --session data/calib/handeye.json --save configs/workcell.yaml
   3. (선택) 저장된 T_base_camera 로 지금 자세를 검증한다
-       python tools/handeye_aruco.py check --iface can_follower --marker-id 0 --marker-mm 60
+       python tools/handeye_aruco.py check --iface can_follower
 
 piper_robot(순기구학) 은 PYTHONPATH 로 (docs/simulation.md). 카메라 왜곡은 0 으로 본다 (d435.json 컬러 계수 0).
 """
@@ -50,27 +54,112 @@ MIN_SPREAD_DEG = 30.0
 MAX_MEDIAN_RES_M = 0.004
 
 
-# ================================================================ 마커 검출 · 자세
+# ================================================================ 표적 (보드 · 마커)
 
 def marker_object_points(size_m: float) -> np.ndarray:
-    """마커 좌표계의 네 모서리 (SOLVEPNP_IPPE_SQUARE 순서: 좌상·우상·우하·좌하, z = 0)."""
+    """마커 하나의 네 모서리 (SOLVEPNP_IPPE_SQUARE 순서: 좌상·우상·우하·좌하, z = 0, 중심 원점)."""
     h = size_m / 2
     return np.array([[-h, h, 0], [h, h, 0], [h, -h, 0], [-h, -h, 0]], dtype=np.float64)
 
 
-def detect_marker(bgr: np.ndarray, marker_id: int) -> np.ndarray | None:
-    """→ 4×2 픽셀 모서리 (검출 순서 = 마커 좌상부터 시계방향) 또는 None."""
-    gray = bgr if bgr.ndim == 2 else cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+class Target:
+    """보드(GridBoard) 또는 마커 하나. 세션에 dict 로 남겨 fit·check 가 같은 표적을 다시 만든다.
+
+    보드 좌표계는 OpenCV GridBoard 그대로: 원점 = 좌상 모서리, x 오른쪽, y 아래.
+    """
+
+    def __init__(self, kind: str, *, cols: int = 2, rows: int = 2, marker_m: float = 0.035, sep_m: float = 0.008,
+                 first_id: int = 10, marker_id: int = 0) -> None:
+        if kind not in ("board", "marker"):
+            raise ValueError("kind 는 board 또는 marker")
+        self.kind, self.cols, self.rows = kind, int(cols), int(rows)
+        self.marker_m, self.sep_m = float(marker_m), float(sep_m)
+        self.first_id, self.marker_id = int(first_id), int(marker_id)
+        self.min_markers = 2 if kind == "board" else 1
+
+    @property
+    def ids(self) -> list[int]:
+        if self.kind == "marker":
+            return [self.marker_id]
+        return list(range(self.first_id, self.first_id + self.cols * self.rows))
+
+    def board(self):
+        return cv2.aruco.GridBoard((self.cols, self.rows), self.marker_m, self.sep_m,
+                                   cv2.aruco.getPredefinedDictionary(DICT), np.array(self.ids))
+
+    @property
+    def size_m(self) -> tuple[float, float]:
+        """표적 전체 가로·세로 (m)."""
+        if self.kind == "marker":
+            return self.marker_m, self.marker_m
+        return (self.cols * self.marker_m + (self.cols - 1) * self.sep_m,
+                self.rows * self.marker_m + (self.rows - 1) * self.sep_m)
+
+    def to_dict(self) -> dict:
+        d = {"kind": self.kind, "dict": "DICT_4X4_50", "marker_m": self.marker_m}
+        if self.kind == "board":
+            d.update(cols=self.cols, rows=self.rows, sep_m=self.sep_m, first_id=self.first_id)
+        else:
+            d.update(marker_id=self.marker_id)
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "Target":
+        if d["kind"] == "board":
+            return Target("board", cols=d["cols"], rows=d["rows"], marker_m=d["marker_m"], sep_m=d["sep_m"],
+                          first_id=d["first_id"])
+        return Target("marker", marker_m=d["marker_m"], marker_id=d["marker_id"])
+
+    @staticmethod
+    def from_args(args) -> "Target":
+        if getattr(args, "marker_id", None) is not None:
+            return Target("marker", marker_m=args.marker_mm / 1000, marker_id=args.marker_id)
+        board = args.board or "2x2"
+        try:
+            cols, rows = (int(v) for v in board.lower().split("x"))
+        except ValueError:
+            raise SystemExit(f"--board 는 '열x행' (예: 2x2): {board}") from None
+        return Target("board", cols=cols, rows=rows, marker_m=args.board_marker_mm / 1000,
+                      sep_m=args.board_sep_mm / 1000, first_id=args.board_first_id)
+
+    def describe(self) -> str:
+        if self.kind == "board":
+            w, h = self.size_m
+            return (f"보드 {self.cols}×{self.rows} id {self.ids[0]}~{self.ids[-1]}, 마커 {self.marker_m * 1000:g} mm, "
+                    f"간격 {self.sep_m * 1000:g} mm ({w * 1000:.0f}×{h * 1000:.0f} mm)")
+        return f"마커 id {self.marker_id}, {self.marker_m * 1000:g} mm"
+
+
+def _detector():
     params = cv2.aruco.DetectorParameters()
     params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(DICT), params)
-    corners, ids, _ = det.detectMarkers(gray)
+    return cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(DICT), params)
+
+
+def detect_target(bgr: np.ndarray, target: Target) -> tuple[np.ndarray, np.ndarray, list[int]] | None:
+    """→ (표적 좌표계 모서리 N×3, 픽셀 모서리 N×2, 찾은 id) — 마커가 target.min_markers 보다 적으면 None.
+
+    모서리는 마커마다 4개씩, 찾은 id 순서대로 이어진다.
+    """
+    gray = bgr if bgr.ndim == 2 else cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    corners, ids, _ = _detector().detectMarkers(gray)
     if ids is None:
         return None
-    for c, i in zip(corners, ids.ravel()):
-        if int(i) == marker_id:
-            return c.reshape(4, 2).astype(np.float64)
-    return None
+    keep = [k for k, i in enumerate(ids.ravel()) if int(i) in target.ids]
+    if len(keep) < target.min_markers:
+        return None
+    corners = [corners[k] for k in keep]
+    found = [int(ids.ravel()[k]) for k in keep]
+    if target.kind == "marker":
+        return marker_object_points(target.marker_m), corners[0].reshape(4, 2).astype(np.float64), found
+    obj, img = target.board().matchImagePoints(corners, np.array(found).reshape(-1, 1))
+    return obj.reshape(-1, 3).astype(np.float64), img.reshape(-1, 2).astype(np.float64), found
+
+
+def detect_marker(bgr: np.ndarray, marker_id: int) -> np.ndarray | None:
+    """마커 하나 → 4×2 픽셀 모서리 (좌상부터 시계방향) 또는 None."""
+    found = detect_target(bgr, Target("marker", marker_id=marker_id))
+    return None if found is None else found[1]
 
 
 def _K(intrinsics) -> np.ndarray:
@@ -78,37 +167,51 @@ def _K(intrinsics) -> np.ndarray:
     return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
 
 
-def marker_pose(corners: np.ndarray, size_m: float, intrinsics, depth_m: np.ndarray | None = None
+def target_pose(obj: np.ndarray, img: np.ndarray, intrinsics, depth_m: np.ndarray | None = None
                 ) -> tuple[np.ndarray, float, float | None]:
-    """→ (T_camera_marker, 재투영 오차 px, 깊이 축척 또는 None).
+    """→ (T_camera_target, 재투영 오차 px, 깊이 축척 또는 None).
 
-    작은 마커(0.9 m 에서 40~50 px)의 PnP 는 시선 방향 거리가 가장 흔들린다. 정렬 깊이가 마커 안에 충분하면
-    마커 중심 거리를 깊이 중앙값에 맞춰 축척한다 (방향은 PnP 그대로).
+    모서리 4개(마커 하나)는 IPPE_SQUARE, 그보다 많으면(보드) IPPE 로 풀고 모든 모서리로 LM 다듬기.
+    작은 표적(0.9 m 에서 40~80 px)의 PnP 는 시선 방향 거리가 가장 흔들린다. 정렬 깊이가 표적 안에 충분하면
+    보이는 모서리 중심까지 거리를 깊이 중앙값에 맞춘다 (방향은 PnP 그대로).
     """
-    obj = marker_object_points(size_m)
+    obj, img = np.asarray(obj, dtype=np.float64), np.asarray(img, dtype=np.float64)
     K = _K(intrinsics)
-    ok, rvec, tvec = cv2.solvePnP(obj, corners, K, None, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+    if len(obj) == 4:
+        ok, rvec, tvec = cv2.solvePnP(obj, img, K, None, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+    else:
+        ok, rvec, tvec = cv2.solvePnP(obj, img, K, None, flags=cv2.SOLVEPNP_IPPE)
+        if ok:
+            rvec, tvec = cv2.solvePnPRefineLM(obj, img, K, None, rvec, tvec)
     if not ok:
         raise ValueError("solvePnP 실패")
     proj, _ = cv2.projectPoints(obj, rvec, tvec, K, None)
-    reproj = float(np.sqrt(np.mean(np.sum((proj.reshape(4, 2) - corners) ** 2, axis=1))))
+    reproj = float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - img) ** 2, axis=1))))
     T = np.eye(4)
     T[:3, :3] = cv2.Rodrigues(rvec)[0]
     T[:3, 3] = tvec.ravel()
     scale = None
     if depth_m is not None:
         mask = np.zeros(depth_m.shape, np.uint8)
-        center = corners.mean(axis=0)
-        inner = (center + 0.6 * (corners - center)).astype(np.int32)       # 가장자리 혼합 픽셀 제외
-        cv2.fillConvexPoly(mask, inner, 1)
+        center = img.mean(axis=0)
+        hull = cv2.convexHull(img.astype(np.float32)).reshape(-1, 2)
+        cv2.fillConvexPoly(mask, (center + 0.6 * (hull - center)).astype(np.int32), 1)   # 가장자리 혼합 픽셀 제외
         d = depth_m[(mask > 0) & (depth_m > 0)]
+        c_obj = obj.mean(axis=0)
+        c_cam = T[:3, :3] @ c_obj + T[:3, 3]
         if len(d) >= 20:
-            scale = float(np.median(d) / T[2, 3])
+            scale = float(np.median(d) / c_cam[2])
             if 0.9 < scale < 1.1:                                          # 크게 다르면 깊이 쪽이 틀렸다
-                T[:3, 3] *= scale
+                T[:3, 3] = scale * c_cam - T[:3, :3] @ c_obj
             else:
                 scale = None
     return T, reproj, scale
+
+
+def marker_pose(corners: np.ndarray, size_m: float, intrinsics, depth_m: np.ndarray | None = None
+                ) -> tuple[np.ndarray, float, float | None]:
+    """마커 하나 → (T_camera_marker, 재투영 오차 px, 깊이 축척 또는 None). target_pose 참고."""
+    return target_pose(marker_object_points(size_m), corners, intrinsics, depth_m)
 
 
 # ================================================================ 풀이
@@ -144,25 +247,25 @@ def _x_from(T: np.ndarray) -> np.ndarray:
     return np.r_[cv2.Rodrigues(T[:3, :3])[0].ravel(), T[:3, 3]]
 
 
-def _refine(F, size_m, T_bc, T_fm, corners_px, intrinsics, iters=50):
-    """T_base_camera·T_flange_marker 를 함께 마커 모서리 재투영 오차(px)로 다듬는다 (Levenberg–Marquardt).
+def _refine(F, T_bc, T_ft, obj_pts, img_pts, intrinsics, iters=50):
+    """T_base_camera·T_flange_target 를 함께 모든 모서리 재투영 오차(px)로 다듬는다 (Levenberg–Marquardt).
 
     재투영 오차는 PnP 의 시선 방향(거리) 흔들림에 영향을 받지 않는다. 카메라 좌표 모서리(3D)로 다듬으면
     그 흔들림이 그대로 들어가 오히려 나빠졌다 (합성 시험: 1.6 → 6.5 mm).
     """
-    obj_h = np.c_[marker_object_points(size_m), np.ones(4)]
     K = _K(intrinsics)
-    obs = [np.asarray(c, dtype=np.float64) for c in corners_px]
+    objs = [np.c_[np.asarray(o, dtype=np.float64), np.ones(len(o))] for o in obj_pts]
+    obs = [np.asarray(c, dtype=np.float64) for c in img_pts]
 
     def resid(x):
-        T_cb, T_fm_ = np.linalg.inv(_T_from(x[:6])), _T_from(x[6:])
+        T_cb, T_ft_ = np.linalg.inv(_T_from(x[:6])), _T_from(x[6:])
         out = []
-        for Fi, o in zip(F, obs):
-            uv = (K @ (T_cb @ Fi @ T_fm_ @ obj_h.T)[:3]).T
+        for Fi, oh, o in zip(F, objs, obs):
+            uv = (K @ (T_cb @ Fi @ T_ft_ @ oh.T)[:3]).T
             out.append((uv[:, :2] / uv[:, 2:3] - o).ravel())
         return np.concatenate(out)
 
-    x = np.r_[_x_from(T_bc), _x_from(T_fm)]
+    x = np.r_[_x_from(T_bc), _x_from(T_ft)]
     r = resid(x)
     lam = 1e-3
     for _ in range(iters):
@@ -186,27 +289,27 @@ def _refine(F, size_m, T_bc, T_fm, corners_px, intrinsics, iters=50):
     return _T_from(x[:6]), _T_from(x[6:])
 
 
-def solve(flanges: list[np.ndarray], cam_markers: list[np.ndarray], size_m: float,
-          corners_px: list | None = None, intrinsics=None) -> tuple[np.ndarray, np.ndarray]:
-    """→ (T_base_camera, T_flange_marker).
+def solve(flanges: list[np.ndarray], cam_targets: list[np.ndarray], obj_pts: list | None = None,
+          img_pts: list | None = None, intrinsics=None) -> tuple[np.ndarray, np.ndarray]:
+    """→ (T_base_camera, T_flange_target).
 
     OpenCV calibrateHandEye(Park) 로 풀고 — 합성 잡음 시험에서 Tsai·Daniilidis 보다 안정적이었다 —
-    픽셀 모서리·내부 파라미터가 있으면 두 변환을 함께 재투영 오차로 다듬는다.
+    자세별 모서리(표적 좌표·픽셀)와 내부 파라미터가 있으면 두 변환을 함께 재투영 오차로 다듬는다.
     """
     F = [validate_T(T, "T_base_flange") for T in flanges]
-    C = [validate_T(T, "T_camera_marker") for T in cam_markers]
+    C = [validate_T(T, "T_camera_target") for T in cam_targets]
     T_bc = solve_eye_to_hand(F, C, method=cv2.CALIB_HAND_EYE_PARK)
-    T_fm = _mean_transform([np.linalg.inv(Fi) @ T_bc @ Ci for Fi, Ci in zip(F, C)])
-    if corners_px is not None and intrinsics is not None:
-        T_bc, T_fm = _refine(F, size_m, T_bc, T_fm, corners_px, intrinsics)
-    return T_bc, T_fm
+    T_ft = _mean_transform([np.linalg.inv(Fi) @ T_bc @ Ci for Fi, Ci in zip(F, C)])
+    if obj_pts is not None and img_pts is not None and intrinsics is not None:
+        T_bc, T_ft = _refine(F, T_bc, T_ft, obj_pts, img_pts, intrinsics)
+    return T_bc, T_ft
 
 
-def residuals(flanges, cam_markers, T_bc: np.ndarray, T_fm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """자세별 (마커 중심 위치 오차 m, 마커 방향 오차 deg) — 카메라로 본 것 vs FK 로 예측한 것."""
+def residuals(flanges, cam_targets, T_bc: np.ndarray, T_ft: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """자세별 (표적 원점 위치 오차 m, 방향 오차 deg) — 카메라로 본 것 vs FK 로 예측한 것."""
     pos, rot = [], []
-    for Fi, Ci in zip(flanges, cam_markers):
-        seen, pred = T_bc @ np.asarray(Ci), np.asarray(Fi) @ T_fm
+    for Fi, Ci in zip(flanges, cam_targets):
+        seen, pred = T_bc @ np.asarray(Ci), np.asarray(Fi) @ T_ft
         pos.append(np.linalg.norm(seen[:3, 3] - pred[:3, 3]))
         rot.append(rotation_angle_deg(seen[:3, :3], pred[:3, :3]))
     return np.array(pos), np.array(rot)
@@ -220,13 +323,13 @@ def fit_warnings(n: int, spread_deg: float, res_m: np.ndarray, T_bc: np.ndarray)
         warn.append(f"자세 간 최대 회전이 {spread_deg:.0f}° 다 — 손목을 ±30° 여러 방향으로 더 기울인다")
     if len(res_m) and np.median(res_m) > MAX_MEDIAN_RES_M:
         warn.append(f"잔차 중앙값 {np.median(res_m) * 1000:.1f} mm 가 기준 {MAX_MEDIAN_RES_M * 1000:.0f} mm 를 넘는다 "
-                    "— 마커가 그리퍼에서 흔들리는지, 팔이 멈춘 뒤 찍었는지 확인")
+                    "— 표적이 그리퍼에서 흔들리는지, 팔이 멈춘 뒤 찍었는지 확인")
     if len(res_m) >= 4:
         med = float(np.median(res_m))
         for i in np.nonzero(res_m > max(3 * med, 0.006))[0]:
             warn.append(f"{i + 1}번째 자세 잔차 {res_m[i] * 1000:.1f} mm 가 유난히 크다 — --drop {i + 1} 로 빼고 다시")
     if T_bc[2, 2] > -0.5:
-        warn.append("카메라 광축이 아래를 보지 않는다 — 마커 크기(--marker-mm)나 관절각 단위를 확인")
+        warn.append("카메라 광축이 아래를 보지 않는다 — 표적 크기(--board-marker-mm·--marker-mm)나 관절각 단위를 확인")
     return warn
 
 
@@ -282,9 +385,10 @@ def flange_reader(iface: str | None):
 # ================================================================ 세션 파일
 
 def load_session(path: Path) -> dict:
+    """세션 dict. 표적 정의는 session["target"] (Target.to_dict), 자세마다 obj_pts·img_pts 를 남긴다."""
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
-    return {"marker_id": None, "marker_m": None, "poses": []}
+    return {"target": None, "poses": []}
 
 
 def save_session(path: Path, session: dict) -> None:
@@ -295,31 +399,40 @@ def save_session(path: Path, session: dict) -> None:
 def _arrays(session: dict, drop=()) -> tuple[list[np.ndarray], list[np.ndarray], list[int]]:
     keep = [i for i in range(len(session["poses"])) if (i + 1) not in set(drop)]
     F = [np.asarray(session["poses"][i]["T_base_flange"], dtype=float) for i in keep]
-    C = [np.asarray(session["poses"][i]["T_camera_marker"], dtype=float) for i in keep]
+    C = [np.asarray(session["poses"][i]["T_camera_target"], dtype=float) for i in keep]
     return F, C, keep
+
+
+def _points(session: dict, keep: list[int]) -> tuple[list | None, list | None]:
+    if not session.get("intrinsics"):
+        return None, None
+    return [session["poses"][i]["obj_pts"] for i in keep], [session["poses"][i]["img_pts"] for i in keep]
 
 
 # ================================================================ 명령
 
-def record_pose(snap, joints, fk, marker_id: int, size_m: float, use_depth: bool = True) -> dict | None:
-    """스냅샷 + 관절각 → 세션 자세 한 개 (마커가 없으면 None)."""
-    corners = detect_marker(snap.color, marker_id)
-    if corners is None:
+def record_pose(snap, joints, fk, target: Target, use_depth: bool = True) -> dict | None:
+    """스냅샷 + 관절각 → 세션 자세 한 개 (표적을 못 찾으면 None)."""
+    found = detect_target(snap.color, target)
+    if found is None:
         return None
-    T_cm, reproj, scale = marker_pose(corners, size_m, snap.intrinsics, snap.depth_m if use_depth else None)
+    obj, img, ids = found
+    T_ct, reproj, scale = target_pose(obj, img, snap.intrinsics, snap.depth_m if use_depth else None)
     T_bf = np.asarray(fk(joints), dtype=float)
     return {"joints_rad": [round(float(q), 6) for q in joints], "T_base_flange": T_bf.round(6).tolist(),
-            "T_camera_marker": T_cm.round(6).tolist(), "corners_px": corners.round(2).tolist(),
+            "T_camera_target": T_ct.round(6).tolist(), "n_markers": len(ids), "marker_ids": sorted(ids),
+            "obj_pts": obj.round(6).tolist(), "img_pts": img.round(3).tolist(),
             "reproj_px": round(reproj, 3), "depth_scale": None if scale is None else round(scale, 4),
             "stamp_s": snap.stamp_s}
 
 
 def cmd_capture(args) -> None:
     session = load_session(args.session)
-    size_m = args.marker_mm / 1000
-    if session["poses"] and (session["marker_id"] != args.marker_id or abs(session["marker_m"] - size_m) > 1e-6):
-        raise SystemExit("세션의 마커 id·크기가 다르다 — 다른 세션 파일을 쓴다")
-    session["marker_id"], session["marker_m"] = args.marker_id, size_m
+    target = Target.from_args(args)
+    if session["poses"] and session.get("target") != target.to_dict():
+        raise SystemExit(f"세션의 표적이 다르다 ({session.get('target')}) — 다른 세션 파일을 쓴다")
+    session["target"] = target.to_dict()
+    print(f"표적: {target.describe()}")
     fk, joint_state = flange_reader(args.iface)
     img_dir = args.session.parent / "handeye_imgs" if args.save_images else None
     print(f"자세마다 팔을 멈추고 Enter (u = 취소, q = 끝). 지금 {len(session['poses'])}개")
@@ -334,9 +447,10 @@ def cmd_capture(args) -> None:
                 print("  마지막 자세 취소")
             continue
         snap = grab_snapshot(args)
-        pose = record_pose(snap, joint_state(), fk, args.marker_id, size_m, not args.no_depth)
+        pose = record_pose(snap, joint_state(), fk, target, not args.no_depth)
         if pose is None:
-            print("  [다시] 마커를 못 찾았다 — 카메라에 마커 전체가 보이는지, 반사·흐림이 없는지 확인")
+            print(f"  [다시] 표적을 못 찾았다 (마커 {target.min_markers}개 이상 필요) — 카메라에 표적이 보이는지, "
+                  "반사·흐림이 없는지 확인")
             continue
         session["intrinsics"] = [float(v) for v in snap.intrinsics]
         session["poses"].append(pose)
@@ -344,11 +458,13 @@ def cmd_capture(args) -> None:
         if img_dir is not None:
             img_dir.mkdir(parents=True, exist_ok=True)
             img = snap.color.copy()
-            cv2.polylines(img, [np.asarray(pose["corners_px"], np.int32)], True, (0, 0, 255), 2)
+            for quad in np.asarray(pose["img_pts"]).reshape(-1, 4, 2):
+                cv2.polylines(img, [quad.astype(np.int32)], True, (0, 0, 255), 2)
             cv2.imwrite(str(img_dir / f"pose_{len(session['poses']):02d}.png"), img)
         F = [np.asarray(p["T_base_flange"]) for p in session["poses"]]
-        z = pose["T_camera_marker"][2][3]
-        print(f"  기록 — 마커 거리 {z * 1000:.0f} mm, 재투영 {pose['reproj_px']:.2f} px"
+        z = pose["T_camera_target"][2][3]
+        print(f"  기록 — 마커 {pose['n_markers']}개 {pose['marker_ids']}, 거리 {z * 1000:.0f} mm, "
+              f"재투영 {pose['reproj_px']:.2f} px"
               + ("" if pose["depth_scale"] is None else f", 깊이 축척 {pose['depth_scale']:.3f}")
               + f" | 자세 {len(F)}개, 최대 회전 {rotation_spread_deg(F):.0f}°")
     print(f"완료 — {len(session['poses'])}개. 다음: fit")
@@ -359,24 +475,27 @@ def cmd_fit(args) -> tuple[np.ndarray, np.ndarray]:
     F, C, keep = _arrays(session, args.drop)
     if len(F) < 3:
         raise SystemExit(f"자세가 {len(F)}개다 — capture 로 8~15개 찍는다")
-    corners = [session["poses"][i]["corners_px"] for i in keep] if session.get("intrinsics") else None
-    T_bc, T_fm = solve(F, C, session["marker_m"], corners, session.get("intrinsics"))
-    res, rot = residuals(F, C, T_bc, T_fm)
+    if session.get("target"):
+        print(f"표적: {Target.from_dict(session['target']).describe()}")
+    obj_pts, img_pts = _points(session, keep)
+    T_bc, T_ft = solve(F, C, obj_pts, img_pts, session.get("intrinsics"))
+    res, rot = residuals(F, C, T_bc, T_ft)
     spread = rotation_spread_deg(F)
-    print(f"{'자세':<5}{'잔차 mm':>9}{'방향 °':>8}{'재투영 px':>11}")
+    print(f"{'자세':<5}{'잔차 mm':>9}{'방향 °':>8}{'재투영 px':>11}{'마커':>6}")
     for i, r, a in zip(keep, res, rot):
-        print(f"{i + 1:<5}{r * 1000:>9.1f}{a:>8.2f}{session['poses'][i]['reproj_px']:>11.2f}")
+        pose = session["poses"][i]
+        print(f"{i + 1:<5}{r * 1000:>9.1f}{a:>8.2f}{pose['reproj_px']:>11.2f}{pose.get('n_markers', 1):>6}")
     print(f"\n자세 {len(F)}개  잔차 중앙값 {np.median(res) * 1000:.1f} mm / 최대 {res.max() * 1000:.1f} mm, 최대 회전 {spread:.0f}°")
     print(f"카메라 위치 (base_link) ({', '.join(f'{v * 1000:.1f}' for v in T_bc[:3, 3])}) mm, "
           f"광축 방향 ({', '.join(f'{v:.3f}' for v in T_bc[:3, 2])})")
-    print(f"마커 ← 플랜지 ({', '.join(f'{v * 1000:.1f}' for v in T_fm[:3, 3])}) mm (마커를 붙인 위치와 맞는지 본다)")
+    print(f"표적 원점 ← 플랜지 ({', '.join(f'{v * 1000:.1f}' for v in T_ft[:3, 3])}) mm (표적을 붙인 위치와 맞는지 본다)")
     tcp = load_config()["workcell"].get("tcp_offset_m")
     if tcp is None:
         print("참고: workcell.tcp_offset_m 이 비어 있다 — 실행 전에 핑거 끝 오프셋을 따로 넣는다 (이 보정과는 무관)")
     warn = fit_warnings(len(F), spread, res, T_bc)
     for w in warn:
         print(f"[경고] {w}")
-    session["fit"] = {"T_base_camera": T_bc.round(6).tolist(), "T_flange_marker": T_fm.round(6).tolist(),
+    session["fit"] = {"T_base_camera": T_bc.round(6).tolist(), "T_flange_target": T_ft.round(6).tolist(),
                       "residual_median_m": float(np.median(res)), "residual_max_m": float(res.max()),
                       "spread_deg": spread, "used": [i + 1 for i in keep], "warnings": warn}
     save_session(args.session, session)
@@ -387,34 +506,96 @@ def cmd_fit(args) -> tuple[np.ndarray, np.ndarray]:
                 f"({time.strftime('%m/%d')}, {args.session.name})")
         line = save_T_base_camera(str(args.save), T_bc, note=note)
         print(f"저장: {args.save}\n  {line[:100]}...")
-    return T_bc, T_fm
+    return T_bc, T_ft
 
 
 def cmd_check(args) -> None:
     session = load_session(args.session)
-    if not session.get("fit"):
-        raise SystemExit("세션에 fit 결과(T_flange_marker)가 없다 — fit 을 먼저 한다")
-    T_fm = np.asarray(session["fit"]["T_flange_marker"], dtype=float)
+    if not session.get("fit") or not session.get("target"):
+        raise SystemExit("세션에 표적·fit 결과(T_flange_target)가 없다 — capture·fit 을 먼저 한다")
+    T_ft = np.asarray(session["fit"]["T_flange_target"], dtype=float)
+    target = Target.from_dict(session["target"])
     T_bc = (np.asarray(session["fit"]["T_base_camera"], dtype=float) if args.from_session
             else load_T_base_camera(str(args.workcell)))
     fk, joint_state = flange_reader(args.iface)
     snap = grab_snapshot(args)
-    pose = record_pose(snap, joint_state(), fk, args.marker_id, args.marker_mm / 1000, not args.no_depth)
+    pose = record_pose(snap, joint_state(), fk, target, not args.no_depth)
     if pose is None:
-        raise SystemExit("마커를 못 찾았다")
-    res, rot = residuals([np.asarray(pose["T_base_flange"])], [np.asarray(pose["T_camera_marker"])], T_bc, T_fm)
-    print(f"카메라로 본 마커 vs 순기구학 예측: 위치 {res[0] * 1000:.1f} mm, 방향 {rot[0]:.2f}°")
+        raise SystemExit("표적을 못 찾았다")
+    res, rot = residuals([np.asarray(pose["T_base_flange"])], [np.asarray(pose["T_camera_target"])], T_bc, T_ft)
+    print(f"카메라로 본 표적 vs 순기구학 예측: 위치 {res[0] * 1000:.1f} mm, 방향 {rot[0]:.2f}° (마커 {pose['n_markers']}개)")
+
+
+def board_page(target: Target, dpi: int = 300):
+    """A4 실제 크기 페이지 (PIL 회색조) — 표적 가운데, 100 mm 자, 영어 설명 (한글 글꼴이 없는 PC 대비)."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    def mm(v: float) -> int:
+        return int(round(v / 25.4 * dpi))
+
+    page = Image.new("L", (mm(210), mm(297)), 255)
+    draw = ImageDraw.Draw(page)
+    font = None
+    for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"):
+        try:
+            font = ImageFont.truetype(f, 38)
+            break
+        except OSError:
+            pass
+    font = font or ImageFont.load_default()
+    w_m, h_m = target.size_m
+    w_px, h_px = mm(w_m * 1000), mm(h_m * 1000)
+    if target.kind == "board":
+        img = target.board().generateImage((w_px, h_px), marginSize=0)
+    else:
+        img = cv2.aruco.generateImageMarker(cv2.aruco.getPredefinedDictionary(DICT), target.marker_id, w_px)
+    x0, y0 = (page.width - w_px) // 2, (mm(210) - h_px) // 2 + mm(20)
+    page.paste(Image.fromarray(img), (x0, y0))
+    y = y0 + h_px + mm(15)
+    if target.kind == "board":
+        lines = [f"ArUco GridBoard {target.cols}x{target.rows}   DICT_4X4_50   ids {target.ids[0]}-{target.ids[-1]}",
+                 f"marker side {target.marker_m * 1000:g} mm   separation {target.sep_m * 1000:g} mm   "
+                 f"board {w_m * 1000:.0f} x {h_m * 1000:.0f} mm"]
+    else:
+        lines = [f"ArUco marker   DICT_4X4_50   id {target.marker_id}", f"marker side {target.marker_m * 1000:g} mm"]
+    lines += ["PRINT AT 100% (actual size, no fit-to-page). Measure the marker side with a ruler.",
+              "Keep the white border (>= 5 mm). Mount flat and rigid on top of the gripper/wrist."]
+    for k, line in enumerate(lines):
+        draw.text((mm(20), y + k * mm(7)), line, fill=0, font=font)
+    ys = mm(255)                                                       # 100 mm 축척 막대
+    draw.line((mm(55), ys, mm(155), ys), fill=0, width=4)
+    for k in range(0, 101, 10):
+        draw.line((mm(55 + k), ys - mm(6 if k % 50 == 0 else 3), mm(55 + k), ys), fill=0, width=3)
+    draw.text((mm(55), ys + mm(3)), "100 mm - this bar must measure exactly 100 mm", fill=0, font=font)
+    draw.text((mm(20), mm(20)), "PAC2026 hand-eye calibration target (tools/handeye_aruco.py)", fill=0, font=font)
+    return page
+
+
+def cmd_board_pdf(args) -> Path:
+    target = Target.from_args(args)
+    out = args.out.expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    board_page(target).save(out, resolution=300)
+    print(f"저장: {out} — {target.describe()}. '실제 크기(100%)' 로 인쇄")
+    return out
 
 
 def main(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    def target_args(p):
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--board", help="GridBoard 열x행 (기본 2x2)")    # 기본값을 두면 --marker-id 와 충돌 검사가 빠진다
+        g.add_argument("--marker-id", type=int, help="보드 대신 마커 하나 (id)")
+        p.add_argument("--board-marker-mm", type=float, default=35.0, help="보드 마커 한 변 (mm, 인쇄물을 자로 잰 값)")
+        p.add_argument("--board-sep-mm", type=float, default=8.0, help="보드 마커 간격 (mm)")
+        p.add_argument("--board-first-id", type=int, default=10, help="보드 첫 마커 id (행 우선으로 이어진다)")
+        p.add_argument("--marker-mm", type=float, default=60.0, help="--marker-id 일 때 마커 한 변 (mm)")
+
     def device_args(p):
         p.add_argument("--iface", help="관절각을 읽을 팔로워 (예: can_follower)")
-        p.add_argument("--marker-id", type=int, default=0)
-        p.add_argument("--marker-mm", type=float, default=60.0, help="검은 사각형 한 변 (mm, 인쇄물을 자로 잰 값)")
-        p.add_argument("--no-depth", action="store_true", help="정렬 깊이로 마커 거리를 보정하지 않는다")
+        p.add_argument("--no-depth", action="store_true", help="정렬 깊이로 표적 거리를 보정하지 않는다")
         p.add_argument("--calib", type=Path, default=ROOT / "configs" / "calib" / "d435.json")
         p.add_argument("--near", type=float, default=150.0, help="Piper Studio 깊이 인코딩 near_mm")
         p.add_argument("--far", type=float, default=1200.0, help="Piper Studio 깊이 인코딩 far_mm")
@@ -424,6 +605,7 @@ def main(argv: list[str] | None = None):
     c = sub.add_parser("capture", help="자세마다 스냅샷 + 관절각 기록")
     c.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "handeye.json")
     c.add_argument("--save-images", action="store_true", help="자세마다 검출 표시 영상을 handeye_imgs/ 에 저장")
+    target_args(c)
     device_args(c)
 
     f = sub.add_parser("fit", help="T_base_camera 를 풀고 점검, --save 로 workcell.yaml 에 저장")
@@ -432,14 +614,18 @@ def main(argv: list[str] | None = None):
     f.add_argument("--save", type=Path, help="T_base_camera 를 쓸 workcell.yaml")
     f.add_argument("--force", action="store_true", help="경고가 있어도 저장")
 
-    k = sub.add_parser("check", help="저장된 T_base_camera 로 지금 자세 검증")
+    k = sub.add_parser("check", help="저장된 T_base_camera 로 지금 자세 검증 (표적은 세션에 남은 것)")
     k.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "handeye.json")
     k.add_argument("--workcell", type=Path, default=ROOT / "configs" / "workcell.yaml")
     k.add_argument("--from-session", action="store_true", help="workcell.yaml 대신 세션의 fit 결과를 쓴다")
     device_args(k)
 
+    b = sub.add_parser("board-pdf", help="표적 A4 PDF (실제 크기, 300 dpi)")
+    b.add_argument("--out", type=Path, default=ROOT / "data" / "calib" / "aruco_board_A4.pdf")
+    target_args(b)
+
     args = ap.parse_args(argv)
-    return {"capture": cmd_capture, "fit": cmd_fit, "check": cmd_check}[args.cmd](args)
+    return {"capture": cmd_capture, "fit": cmd_fit, "check": cmd_check, "board-pdf": cmd_board_pdf}[args.cmd](args)
 
 
 if __name__ == "__main__":

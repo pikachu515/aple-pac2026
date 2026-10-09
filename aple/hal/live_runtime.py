@@ -60,9 +60,11 @@ def missing_for_live_execution(config):
         check('inspection.views.center_m', lambda: vector(cfg['inspection']['views']['center_m'], 3))
     for key in ('sample_step_rad', 'wall_thickness_m'):
         check('safety.segment_validation.'+key, lambda key=key: positive(settings.get(key), key))
-    check('workcell.tray.center_m', lambda: vector(work['tray'].get('center_m'), 3))
-    for name, box in work['boxes'].items():
-        check('workcell.boxes.'+name+'.origin_m', lambda box=box: vector(box.get('origin_m'), 3))
+    from aple.perception.workcell_detect import auto_enabled
+    if not auto_enabled(cfg):                          # auto_detect 면 장면마다 카메라로 찾는다 (예비값은 선택)
+        check('workcell.tray.center_m', lambda: vector(work['tray'].get('center_m'), 3))
+        for name, box in work['boxes'].items():
+            check('workcell.boxes.'+name+'.origin_m', lambda box=box: vector(box.get('origin_m'), 3))
     for name in ('home', 'scan'):
         check('workcell.poses.'+name, lambda name=name: vector(work['poses'].get(name+'_joint_rad'), 6))
     web = cfg['piper_web']

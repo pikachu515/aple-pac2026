@@ -23,7 +23,7 @@ def load_snapshot(path: str | Path, scene_id: int = 0) -> SceneSnapshot:
             color=z["color"],
             depth_m=z["depth_m"],
             intrinsics=tuple(float(v) for v in z["intrinsics"]),
-            stamp_s=float(z["stamp_s"]),
+            stamp_s=float(z["stamp_s"]) if "stamp_s" in z.files else 0.0,   # 현장 grab 스냅샷에는 없을 수 있다
         )
 
 

@@ -56,8 +56,35 @@ def estimate(snap: SceneSnapshot, T_base_camera: np.ndarray, cfg: dict) -> list[
     for name, box in cfg["workcell"]["boxes"].items():
         if box.get("origin_m") is None:
             continue
-        out.append(_estimate_box(snap, Grade[name], box, pts, valid, shape, T, p))
+        box_pts = _floor_referenced_points(snap, box, T) if box.get("floor_fit_px") is not None else pts
+        out.append(_estimate_box(snap, Grade[name], box, box_pts, valid, shape, T, p))
     return out
+
+
+def floor_fit_eval(coef, u, v) -> np.ndarray:
+    """픽셀 → 그 자리 상자 바닥의 '잰' base 높이 (2차식 z = c0 + c1 u + c2 v + c3 u² + c4 uv + c5 v², u·v 는 /1000)."""
+    u, v = np.asarray(u, float) / 1000.0, np.asarray(v, float) / 1000.0
+    c = np.asarray(coef, float)
+    return c[0] + c[1] * u + c[2] * v + c[3] * u * u + c[4] * u * v + c[5] * v * v
+
+
+def _floor_referenced_points(snap: SceneSnapshot, box: dict, T: np.ndarray) -> np.ndarray:
+    """깊이 휨을 상자 바닥 기준으로 지운 점들 (workcell.auto_detect 가 준 floor_fit_px 가 있을 때).
+
+    10/9 실기: 영상 가장자리에서 깊이가 15~20 % 짧아 base 높이·위치가 수 cm~20 cm 틀렸다. 상자 바닥에서 잰 높이를
+    픽셀 위치의 2차식으로 맞춰 두고(floor_fit_px), 점마다 '바닥 위 높이' = 잰 높이 − 그 자리 바닥 높이 를 구한 뒤
+    실제 높이 origin z + 바닥 위 높이 의 평면과 시선이 만나는 곳을 점 위치로 쓴다 (옆 위치도 깊이에 기대지 않는다).
+    """
+    valid = snap.depth_m > 0
+    v, u = np.nonzero(valid)
+    meas = camera_to_base(depth_points(snap.depth_m, snap.intrinsics)[valid], T)[:, 2]
+    rel = meas - floor_fit_eval(box["floor_fit_px"], u, v)
+    z = float(box["origin_m"][2]) + rel
+    fx, fy, cx, cy = snap.intrinsics
+    rays = np.column_stack([(u - cx) / fx, (v - cy) / fy, np.ones(len(u))]) @ np.asarray(T)[:3, :3].T
+    o = np.asarray(T)[:3, 3]
+    s_ = (z - o[2]) / rays[:, 2]
+    return np.column_stack([o[0] + rays[:, 0] * s_, o[1] + rays[:, 1] * s_, z])
 
 
 def _estimate_box(snap, box_id: Grade, box: dict, pts: np.ndarray, valid: np.ndarray, shape, T, p) -> BoxOccupancy:

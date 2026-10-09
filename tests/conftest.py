@@ -12,7 +12,8 @@ from pathlib import Path
 import aple.config as _config
 
 #: 현장에서 채우는 값 — 시험에서는 비어 있는 것으로 본다
-FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_json")
+FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_json",
+              "workcell.auto_detect.enabled")      # 자동 검출은 그 시험(test_workcell_detect)에서만 켠다
 
 _original_load = _config.load_config
 
@@ -42,6 +43,7 @@ PRISTINE_LINES = {
     "workcell.yaml": {
         "  T_base_camera:": "  T_base_camera: null           # 4x4, eye-to-hand 캘리브레이션 결과 (m)",
         "  tcp_offset_m:": "  tcp_offset_m: null            # 핑거 어댑터 반영",
+        "  auto_detect:": "  auto_detect: {enabled: false}",
     },
     "color.yaml": {
         "  card_json:": "  card_json: null                 # tools/color_session.py card 결과 경로 (현장 세션 폴더의 card.json). CardMonitor 가 읽는다",

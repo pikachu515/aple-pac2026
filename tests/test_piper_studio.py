@@ -177,6 +177,10 @@ class FakeMotionStudio:
         self.calls.append(("trajectory", waypoints, timeout_s))
         self.joints = waypoints[-1]
 
+    def send_timed_joint_trajectory(self, goals, limits, *, speed_scale, timeout_s, gripper_width_watch=None):
+        self.calls.append(("timed", goals, timeout_s))
+        self.joints = goals[-1].position_rad
+
     def send(self, command, *, timeout_s=None):
         self.calls.append(("send", command, timeout_s))
         self.joints = command.position_rad
@@ -314,29 +318,27 @@ def test_lighting_status_does_not_coerce_raw_metrics(piper_web):
         adapter.lighting_status()
 
 
-def test_motion_transport_uses_more_waypoints_when_speed_is_lower():
+def test_motion_transport_lower_speed_takes_more_time():
+    from aple.execution.timed_motion import MotionLimits
+    limits = MotionLimits((1.,)*6, (2.,)*6, .02, .1, .1)
+    durations = []
+    for scale in (1., .5):
+        studio = FakeMotionStudio()
+        transport = PiperStudioMotionTransport(studio, max_joint_step_rad=.2, motion_limits=limits)
+        transport.move_joint_goal((.6, 0, 0, 0, 0, 0), speed_scale=scale, timeout_s=5.)
+        kind, goals, _ = studio.calls[0]
+        assert kind == 'timed'
+        assert goals[-1].position_rad == pytest.approx((.6, 0, 0, 0, 0, 0))
+        durations.append(goals[-1].time_s)
+    assert durations[1] > durations[0]
+
+
+def test_motion_transport_without_measured_limits_refuses_before_command():
     studio = FakeMotionStudio()
-    transport = PiperStudioMotionTransport(studio, max_joint_step_rad=0.2)
-
-    transport.move_joint_goal((0.6, 0.0, 0.0, 0.0, 0.0, 0.0), speed_scale=0.5, timeout_s=1.0)
-
-    kind, waypoints, timeout_s = studio.calls[0]
-    assert kind == "trajectory"
-    assert timeout_s == pytest.approx(1.0)
-    assert len(waypoints) == 6
-    assert waypoints[-1] == pytest.approx((0.6, 0.0, 0.0, 0.0, 0.0, 0.0))
-
-
-def test_motion_transport_uses_single_goal_when_no_subdivision_is_needed():
-    studio = FakeMotionStudio()
-    transport = PiperStudioMotionTransport(studio, max_joint_step_rad=0.2)
-
-    transport.move_joint_goal((0.1, 0.0, 0.0, 0.0, 0.0, 0.0), speed_scale=1.0, timeout_s=1.0)
-
-    kind, position_rad, timeout_s = studio.calls[0]
-    assert kind == "goal"
-    assert position_rad == pytest.approx((0.1, 0.0, 0.0, 0.0, 0.0, 0.0))
-    assert timeout_s == pytest.approx(1.0)
+    transport = PiperStudioMotionTransport(studio, max_joint_step_rad=.2)
+    with pytest.raises(PiperWebError, match='measured motion limits'):
+        transport.move_joint_goal((.1, 0, 0, 0, 0, 0), speed_scale=1., timeout_s=1.)
+    assert studio.calls == []
 
 
 class _CaptureProvider:
@@ -736,3 +738,101 @@ def test_invalid_expected_torque_refuses_without_sending(piper_web, expected):
     with pytest.raises(PiperWebError, match='fixed_effort'):
         adapter.send_joint_goal((0,) * 6, .5)
     assert not any(c[1].startswith('/api/robots/jog/') for c in fake.calls)
+
+
+def test_timed_studio_session_waits_and_always_cleans_up(piper_web):
+    import time
+    from aple.execution.timed_motion import MotionLimits, TimedJointGoal
+    fake, studio = piper_web
+    start = studio.joint_state()
+    limits = MotionLimits((1.,)*6, (2.,)*6, .02, .1, .1)
+    before = time.monotonic()
+    studio.send_timed_joint_trajectory((TimedJointGoal(start, .02), TimedJointGoal(start, .04)),
+                                      limits, speed_scale=1., timeout_s=.5)
+    assert time.monotonic()-before >= .04
+    paths = [path for method, path, body in fake.calls if method == 'POST']
+    assert paths.count('/api/robots/jog/start') == 1
+    assert paths.count('/api/robots/jog/goal') == 2
+    assert paths.count('/api/robots/jog/stop') == 1
+
+
+@pytest.mark.parametrize('feedback_delay_s, succeeds', [(.03, True), (.26, False)])
+def test_timed_studio_feedback_crossing_goal_time_respects_total_deadline(
+    piper_web, monkeypatch, feedback_delay_s, succeeds,
+):
+    from types import SimpleNamespace
+    import aple.hal.piper_studio as studio_module
+    from aple.execution.timed_motion import MotionLimits, TimedJointGoal
+
+    _, studio = piper_web
+    start = studio.joint_state()
+    clock = [0.]
+    calls = []
+
+    def sleep(duration):
+        clock[0] += duration
+
+    def read_state():
+        clock[0] += feedback_delay_s
+        return start, 0.
+
+    def request(method, path, body=None):
+        calls.append(path)
+        if path.endswith('/start'):
+            return {'status': 'started', 'running': True, 'iface': studio._iface}
+        return {'status': 'stopped' if path.endswith('/stop') else 'ok'}
+
+    monkeypatch.setattr(studio_module, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0], sleep=sleep,
+    ))
+    monkeypatch.setattr(studio, '_ensure_authenticated', lambda **kw: None)
+    monkeypatch.setattr(studio, 'verify_gripper_torque', lambda: 1.)
+    monkeypatch.setattr(studio, '_start_estop_keepalive', lambda: SimpleNamespace(
+        check=lambda: None, stop=lambda: None,
+    ))
+    monkeypatch.setattr(studio, '_read_raw_state', read_state)
+    monkeypatch.setattr(studio, '_request', request)
+    limits = MotionLimits((1.,)*6, (2.,)*6, .02, .1, .1)
+    goals = (TimedJointGoal(start, .02), TimedJointGoal(start, .04))
+    if succeeds:
+        studio.send_timed_joint_trajectory(goals, limits, speed_scale=1., timeout_s=.5)
+        assert calls.count('/api/robots/jog/goal') == 2
+    else:
+        with pytest.raises(PiperWebError, match='deadline'):
+            studio.send_timed_joint_trajectory(goals, limits, speed_scale=1., timeout_s=.5)
+        assert '/api/robots/jog/goal' not in calls
+    assert calls.count('/api/robots/jog/stop') == 1
+
+
+def test_timed_studio_overspeed_stops_jog(piper_web):
+    from aple.execution.timed_motion import MotionLimits, TimedJointGoal
+    fake, studio = piper_web
+    fake.auto_reach_goals = True # instantaneous fake jumps should violate the physical-rate check
+    start = studio.joint_state()
+    target = (start[0]+.6, *start[1:])
+    limits = MotionLimits((.1,)*6, (.2,)*6, .02, .1, .01)
+    with pytest.raises(PiperWebError, match='velocity exceeded'):
+        studio.send_timed_joint_trajectory((TimedJointGoal(target, .02), TimedJointGoal(target, .04)),
+                                          limits, speed_scale=1., timeout_s=.5)
+    assert any(method == 'POST' and path == '/api/robots/jog/stop' for method, path, body in fake.calls)
+
+
+def test_timed_studio_grip_width_loss_stops_before_next_goal(piper_web):
+    from aple.execution.timed_motion import MotionLimits, TimedJointGoal
+    fake, studio = piper_web
+    start = studio.joint_state()
+    limits = MotionLimits((1.,)*6, (2.,)*6, .02, .1, .1)
+    with pytest.raises(PiperWebError, match='gripper width changed'):
+        studio.send_timed_joint_trajectory((TimedJointGoal(start, .02),), limits,
+            speed_scale=1., timeout_s=.5, gripper_width_watch=(.06, .003))
+    assert not any(path == '/api/robots/jog/goal' for method, path, body in fake.calls)
+    assert any(path == '/api/robots/jog/stop' for method, path, body in fake.calls)
+
+
+def test_timeout_during_setup_never_starts_jog(piper_web, monkeypatch):
+    import time
+    fake, studio = piper_web
+    monkeypatch.setattr(studio, '_ensure_authenticated', lambda **kw:time.sleep(.06))
+    with pytest.raises(PiperWebError, match='Timed out waiting'):
+        studio.send_joint_goal((0, 1.57, -1.48, 0, 0, 0), timeout_s=.02)
+    assert not any(path == '/api/robots/jog/start' for method, path, body in fake.calls)

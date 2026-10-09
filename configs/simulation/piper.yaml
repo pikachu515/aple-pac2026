@@ -29,6 +29,7 @@ safety:
     sample_step_rad: 0.01
     floor_z_m: 0.0
     clearance_m: 0.001
+    support_contact_tolerance_m: 0.001 # 가상 깊이/FK 오차만; 실기 설정으로 복사 금지
     obstacle_aabbs_m: []
 grasp_planner:
   # Reachable down-facing flange convention for this virtual cell; hardware needs review.

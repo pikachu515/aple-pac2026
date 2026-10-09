@@ -5,3 +5,12 @@ safety:
   workspace_aabb_m: null       # measured [[x_min,x_max], [y_min,y_max], [z_min,z_max]]
   speed_scale_max: 0.5
   gripper_effort_max: 1000     # Piper Web v0.5.9 고정 effort 상한
+  segment_validation:
+    sample_step_rad: null
+    floor_z_m: null
+    clearance_m: null
+    wall_thickness_m: null
+    support_contact_tolerance_m: null # 리프트 시작 접촉에서만 허용할 바닥/과실 추정 오차 (실측)
+    obstacle_aabbs_m: null     # 실측 장애물. 장애물이 없다고 확인한 경우 []
+    self_collision_pairs: null # 검증할 비인접 링크 이름 쌍 [[link_a, link_b], ...]
+    payload_self_links: null   # 그리퍼/사과와 충돌 검증할 링크 이름 목록

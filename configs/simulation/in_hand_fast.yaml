@@ -1,0 +1,14 @@
+# Simulation-only candidate; no measured hardware speed claim.
+optimization:
+  inspection_rotation_mode: tool_roll
+  choose_transfer_route: true
+  native_slip_fk: true
+  exact_final_descent: true
+  inspection_physics_settle_s: 0.06
+  studio_poll_interval_s: 0.02
+  preopen_m: 0.108 # below the 0.112 m virtual limit; avoid endpoint overshoot
+  empty_joint_velocity_rad_s: 1.8
+  loaded_joint_velocity_rad_s: 0.55
+  rotation_joint_velocity_rad_s: 0.35
+  # Preserve baseline final-descent ceiling: 0.35*0.2 = 0.55*this scale.
+  landing_speed_scale: 0.1272727272727273

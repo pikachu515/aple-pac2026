@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
@@ -95,11 +96,17 @@ class CycleManager:
 
         records: list[CycleRecord] = []
         for cycle_index in range(1, cycles + 1):
+            capture_started = time.monotonic()
             snapshot = self._capture()
+            capture_duration = time.monotonic()-capture_started
             if not isinstance(snapshot, SceneSnapshot):
                 raise TypeError("capture provider must return a SceneSnapshot")
 
             plan = self._plan_scene(snapshot)
+            timings = getattr(plan, 'timings', None)
+            if isinstance(timings, dict):
+                # SceneRunner exposes mutable timing metadata without changing schema.
+                timings['t_scan_s'] = timings.get('t_scan_s', 0.0) + capture_duration
             execution = None
             if not self.dry_run:
                 assert self._execute_scene is not None

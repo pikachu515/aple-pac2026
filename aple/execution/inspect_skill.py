@@ -22,6 +22,7 @@ def build_inspection_plan(
     tilt_rad: float,
     rotation_angles_rad: Sequence[float],
     settle_time_s: float,
+    rotation_axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
 ) -> InspectionPlan:
     """Rotate the held apple around its center and return one tool pose per view."""
     if len(apple_center_in_base) != 3 or not all(
@@ -36,6 +37,10 @@ def build_inspection_plan(
         raise ValueError("rotation_angles_rad must contain at least one view angle")
     if not all(math.isfinite(angle) for angle in rotation_angles_rad):
         raise ValueError("rotation_angles_rad must contain finite angles")
+    if len(rotation_axis) != 3 or not all(math.isfinite(v) for v in rotation_axis) or not math.isclose(
+        sum(v * v for v in rotation_axis), 1.0, abs_tol=1e-9
+    ):
+        raise ValueError("rotation_axis must be a unit vector in tool coordinates")
 
     apple_center_pose = Pose3D(
         apple_center_in_base,
@@ -47,8 +52,9 @@ def build_inspection_plan(
             Pose3D(
                 apple_center_pose.position_m,
                 _multiply(
-                    _axis_angle((0.0, 0.0, 1.0), angle),
-                    _axis_angle((0.0, 1.0, 0.0), tilt_rad),
+                    _multiply(_axis_angle((0.0, 1.0, 0.0), tilt_rad),
+                              _axis_angle(rotation_axis, angle)),
+                    apple_in_tcp.orientation_xyzw,
                 ),
             ),
             tcp_from_apple_inverse,

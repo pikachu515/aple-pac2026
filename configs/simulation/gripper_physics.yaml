@@ -1,10 +1,16 @@
 # ASSUMPTIONS ONLY: not a reconstruction of the photo or measured hardware.
 # The photo's D1-D4 remain point distances in configs/gripper_attachment.yaml.
 assumed_gripper:
+  # User-provided finger cup diameters. SI conversion occurs at model build.
+  opaque_cup_outer_diameter_mm: 78.664
+  opaque_cup_inner_diameter_mm: 48.92
+  # Use the assumed spherical cup curvature; recess is not a measured value.
+  concave_ring: true
+  ring_pad_clearance_m: 0.0005 # leave the full aperture clear of contact pads
   flange_tcp_m: [0, 0, 0.16]
   closed_contact_gap_m: 0.044
   finger_stroke_m: 0.034        # Studio 0.5.12 stock prismatic joints, each finger
-  cup_radius_m: 0.035          # assumed concave padded contact surface
+  cup_radius_m: 0.046          # assumed curvature radius, not outside diameter
   cup_grid_offsets_m: [-0.020, 0, 0.020]
   pad_radius_m: 0.003
   pad_friction: [0.8, 0.02, 0.001]

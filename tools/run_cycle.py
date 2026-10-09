@@ -107,15 +107,8 @@ def with_card_monitor(cfg: dict, capture: Callable[[], SceneSnapshot], card_path
 
 
 def missing_for_execution(cfg: dict) -> list[str]:
-    """실제 로봇 실행 전에 채워져 있어야 하는 것들. 코드 부품이 들어오면 이 목록과 실행 어댑터 연결을 함께 고친다."""
-    missing = []
-    if cfg["workcell"].get("T_base_camera") is None:
-        missing.append("workcell.T_base_camera - 카메라-로봇 캘리브레이션 (역할 A, #13 tools/touch_calib.py)")
-    if cfg["workcell"].get("tcp_offset_m") is None:
-        missing.append("workcell.tcp_offset_m - 핑거 어댑터 장착 후 TCP 오프셋 실측 (역할 D, 이슈 #24)")
-    missing.append("실기 실행 연결·검증 - TCP IK/FK 및 SegmentValidator는 구현됨. "
-                   "실기 속도·데드맨, 추가 핑거/사과·자기 충돌 검증 후 연결 필요 (역할 B, #24)")
-    return missing
+    from aple.hal.live_runtime import missing_for_live_execution
+    return missing_for_live_execution(cfg)
 
 
 def print_records(records: list[CycleRecord]) -> None:
@@ -147,6 +140,8 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         ap.error("--cycles must be positive")
 
     cfg = load_config()
+    if args.card is not None:
+        cfg['color']['card_json'] = str(args.card)
     world = adapter = None
     checks = []
     if args.simulate:
@@ -193,8 +188,13 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         capture = saving(capture, args.save)
         print(f"  장면 저장: {args.save}")
     capture, light_for = with_card_monitor(cfg, capture, card)
-    pipeline = PickPlacePipeline(cfg, adapter)
-    runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for)))(cfg, pipeline)
+    if args.execute:
+        from aple.hal.live_runtime import build_live_runtime
+        runtime = build_live_runtime(cfg, capture, light_for)
+        capture, pipeline, runner = runtime.capture, runtime.pipeline, runtime.runner
+    else:
+        pipeline = PickPlacePipeline(cfg, adapter)
+        runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for)))(cfg, pipeline)
 
     manager = CycleManager(cfg, capture=capture, plan_scene=runner.plan, execute_scene=runner.execute,
                            make_records=runner.records, dry_run_capture=capture, dry_run=not (args.execute or args.simulate))

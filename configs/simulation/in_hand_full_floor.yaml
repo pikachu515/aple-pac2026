@@ -1,0 +1,69 @@
+# SIMULATION ONLY: entire finite Studio table in a downward-facing camera.
+in_hand_scene:
+  gripper_overrides:
+    cup_radius_m: 0.046
+    max_goal_settle_s: 2.0
+    top_camera_fovy_deg: 55.0
+    top_camera_align_xy: true
+  initial_joint_rad:
+  - 0.0
+  - 0.750168
+  - -0.150425
+  - 0.0
+  - -0.512495
+  - 0.0
+  apple_specs:
+  - diameter_m: 0.0826
+    mass_kg: 0.252
+    red_fraction: 0.02
+  - diameter_m: 0.0873
+    mass_kg: 0.2971
+    red_fraction: 0.5
+  - diameter_m: 0.0919
+    mass_kg: 0.337
+    red_fraction: 0.9
+  map_xy_m:
+  - - 0.1
+    - 0.55
+  - - -0.38
+    - 0.38
+  reach_radius_m:
+  - 0.3
+  - 0.49
+  box_cell_pitch_m: 0.12
+  object_min_distance_m: 0.17
+  clearance_m: 0.025
+  inspection_center_m:
+  - 0.325
+  - 0.0
+  - 0.24
+  inspection_clear_radius_m: 0.08
+  transfer_arc_radius_m: 0.4
+  transfer_arc_step_rad: 0.08
+  far_place_radius_m: 0.48
+  far_place_tilt_rad: 2.617993878
+  max_layout_attempts: 20000
+  preopen_m: 0.11
+  grip_open_delta_m: 0.006
+  camera_height_m: 1.2
+  workspace_aabb_m:
+  - - 0.05
+    - 0.6
+  - - -0.4
+    - 0.4
+  - - 0.001
+    - 0.65
+  empty_joint_velocity_rad_s: 1.0
+  loaded_joint_velocity_rad_s: 0.35
+  rotation_joint_velocity_rad_s: 0.2
+  max_slip_m: 0.012
+  tilt_rad: 1.5708
+  rotation_angles_rad:
+  - -1.745329
+  - -0.610865
+  - 0.610865
+  - 1.745329
+  settle_time_s: 0.3
+  video_fps: 5
+  transfer_height_m: 0.24
+  camera_fovy_deg: 55.0

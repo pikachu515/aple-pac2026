@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
+from copy import deepcopy
+import time
 from typing import Callable, Sequence
 
 import numpy as np
@@ -30,7 +32,7 @@ from aple.execution.motion_executor import (
 from aple.inspection.in_hand_capture import InHandCapture
 from aple.orchestration.recovery import RecoveryAction, RecoveryDecision, RecoveryPolicy
 from aple.planning.grasp_profile import select as select_grasp_profile
-from aple.planning.placement_planner import PlacementPlanner
+from aple.planning.placement_planner import PlacementPlanner, PlacementVerification
 from aple.planning.task_planner import plan_queue
 from aple.schema import (
     AppleState,
@@ -64,6 +66,8 @@ class AppleWorkPlan:
     placement: PlacementPlan | None
     execution: ExecResult | None = None
     final_grade: GradeResult | None = None
+    timings: dict[str, float] = field(default_factory=dict)
+    placement_verification: PlacementVerification | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +234,9 @@ class PickPlacePipeline:
             (apple.scene_id, apple.apple_id): apple for apple in apples
         }
         work_items: list[AppleWorkPlan] = []
+        # Preview reservations are local to this plan. Repeated dry runs must
+        # not consume real cells. Executed cells are claimed immediately before motion.
+        preview_planner = deepcopy(self._placement_planner)
 
         for task in tasks:
             key = (task.scene_id, task.apple_id)
@@ -241,7 +248,7 @@ class PickPlacePipeline:
                     raise ValueError(
                         f"task for apple {task.apple_id} has no matching GradeResult"
                     )
-                placement = self._placement_planner.plan(
+                placement = preview_planner.plan(
                     apples_by_key[key], grade, list(boxes)
                 )
             work_items.append(
@@ -279,14 +286,14 @@ class PickPlacePipeline:
         scene_invalidated = False
         for item in work_plan.items:
             if stopped:
-                if scene_invalidated and item.placement is not None:
-                    self._placement_planner.release(int(item.placement.box_id), item.placement.cell_index)
                 completed.append(item)
                 continue
             if item.task.action == TaskAction.PICK_INSPECT_PLACE and inspect_params is not None:
+                started = time.monotonic()
                 executed, rescanned = self._execute_mode_b(
                     item, inspect_params, boxes, rescan_for_retry, backend=backend
                 )
+                executed = replace(executed, timings={**executed.timings, "t_total_s": time.monotonic()-started})
                 completed.append(executed)
                 scene_invalidated = rescanned
                 stopped = rescanned or not executed.execution.success
@@ -372,6 +379,8 @@ class PickPlacePipeline:
                 f"PICK_PLACE task for apple {item.apple.apple_id} has no grasp candidate"
             )
 
+        self._placement_planner.reserve(item.placement)
+        started = time.monotonic()
         result = self._executor.pick_place(
             item.apple,
             item.profile,
@@ -379,7 +388,22 @@ class PickPlacePipeline:
             item.placement,
             backend=backend,
         )
-        return replace(item, execution=result)
+        return replace(item, execution=result,
+                       timings={**self._executor.stage_timings, "t_total_s": time.monotonic() - started})
+
+    def verify_item(self, item: AppleWorkPlan, before: Sequence[BoxOccupancy],
+                    after: Sequence[BoxOccupancy]) -> AppleWorkPlan:
+        """Confirm measured placement before allowing the next apple to move."""
+        if item.placement is None or item.execution is None or not item.execution.success:
+            return item
+        old = next((b for b in before if b.box_id == item.placement.box_id), None)
+        new = next((b for b in after if b.box_id == item.placement.box_id), None)
+        verification = None
+        if old is not None and new is not None:
+            verification = self._placement_planner.verify(item.placement, item.apple, old, new)
+        ok = verification is not None and verification.verified and verification.success
+        return replace(item, placement_verification=verification,
+                       execution=item.execution if ok else ExecResult(False, FailureCode.ABORTED, Phase.RETREAT))
 
     def pick_for_inspection(
         self, item: AppleWorkPlan, *, backend: str | None = None
@@ -397,7 +421,7 @@ class PickPlacePipeline:
             item.grasp_candidate,
             backend=backend,
         )
-        return HeldAppleWork(item, result)
+        return HeldAppleWork(replace(item, timings={**item.timings, **self._executor.stage_timings}), result)
 
     def inspect_held_apple(self, held: HeldAppleWork) -> HeldAppleWork:
         """Run configured in-hand views; the adapter emits capture data for inspection."""
@@ -425,7 +449,8 @@ class PickPlacePipeline:
                 "in-hand slip at view %d: inspection stopped, apple is still held",
                 result.slip_view_index,
             )
-        return replace(held, inspection=result, slip=slip)
+        return replace(held, item=replace(held.item, timings={**held.item.timings, **self._executor.stage_timings}),
+                       inspection=result, slip=slip)
 
     def _build_view_check(
         self, held: HeldAppleWork
@@ -470,6 +495,7 @@ class PickPlacePipeline:
         self, held: HeldAppleWork, params: InspectParams
     ) -> HeldAppleWork:
         """Accumulate captured views and classify using the existing mode-B pipeline."""
+        started = time.monotonic()
         inspection = held.inspection
         if inspection is None or not inspection.success:
             raise ValueError("a successful in-hand inspection is required before regrading")
@@ -532,7 +558,8 @@ class PickPlacePipeline:
             ],
             gripper_range_mm=(float(mm_range[0]), float(mm_range[1])),
         )
-        return replace(held, regraded_grade=grade)
+        return replace(held, regraded_grade=grade, item=replace(held.item, timings={
+            **held.item.timings, 't_inspect_s': held.item.timings.get('t_inspect_s', 0.) + time.monotonic()-started}))
 
     def regrade_with_slip_decision(
         self,
@@ -811,6 +838,7 @@ class PickPlacePipeline:
             placement=placement,
             execution=result,
             final_grade=grade,
+            timings={**held.item.timings, **self._executor.stage_timings},
         )
 
     def release_placement_reservation(self, box_id: int, cell_index: int) -> None:

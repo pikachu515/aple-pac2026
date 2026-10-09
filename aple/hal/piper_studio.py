@@ -110,6 +110,7 @@ class PiperStudio:
         cfg = apply_attachment_geometry(cfg)
         self.cfg = cfg["piper_web"]
         self._expected_gripper_effort = cfg.get("execution", {}).get("gripper", {}).get("fixed_effort")
+        self._grasp_settings = cfg.get('execution', {}).get('gripper', {})
         self._enabled = self.cfg.get("enabled", False)
         self._base_url = str(self.cfg["base_url"]).rstrip("/")
         self._iface = self.cfg.get("iface")
@@ -352,15 +353,62 @@ class PiperStudio:
     def _move_to_normalized(self, target: dict[str, float], timeout_s: float) -> None:
         self._move_sequence_to_normalized((target,), timeout_s)
 
+    def send_timed_joint_trajectory(self, goals, limits, *, speed_scale, timeout_s, gripper_width_watch=None):
+        """One protected jog session, scheduled setpoints and measured speed checks."""
+        self._require_enabled()
+        self._require_robotd_safety_confirmation()
+        if not goals:
+            raise ValueError('timed trajectory must contain at least one goal')
+        if isinstance(speed_scale, bool) or not math.isfinite(speed_scale) or not 0 < speed_scale <= 1:
+            raise ValueError('invalid timed trajectory speed scale')
+        targets, intervals, last = [], [], 0.0
+        for goal in goals:
+            if not math.isfinite(goal.time_s) or goal.time_s <= last:
+                raise ValueError('timed goal times must be finite and strictly increasing')
+            targets.append(self._normalize_joint_target(goal.position_rad))
+            intervals.append(goal.time_s-last)
+            last = goal.time_s
+        if last > timeout_s:
+            raise ValueError('timed trajectory cannot fit within timeout')
+        self._move_sequence_to_normalized(tuple(targets), timeout_s,
+            intervals_s=tuple(intervals),
+            velocity_limits_rad_s=tuple(v*speed_scale for v in limits.velocity_rad_s),
+            tracking_tolerance_rad=limits.tracking_tolerance_rad,
+            velocity_tolerance_rad_s=limits.velocity_tolerance_rad_s,
+            gripper_width_watch=gripper_width_watch)
+
+    def close_for_grasp(self, diameter_m, effort, *, timeout_s):
+        """Accept settled contact before the inward goal; verify fruit after lifting."""
+        from aple.execution.timed_motion import positive
+        self._require_enabled()
+        self._require_robotd_safety_confirmation()
+        settings = self._grasp_settings
+        compression = positive(settings.get('closing_compression_m'), 'closing_compression_m')
+        positive(settings.get('contact_settle_s'), 'contact_settle_s')
+        positive(settings.get('contact_width_tolerance_m'), 'contact_width_tolerance_m')
+        positive(settings.get('contact_stability_m'), 'contact_stability_m')
+        if effort != self._expected_gripper_effort:
+            raise PiperWebError('command effort must match execution.gripper.fixed_effort')
+        goal = self._normalize_joint_target(self.joint_state())
+        goal['gripper'] = self._normalize_gripper_width(diameter_m-compression)
+        self._move_sequence_to_normalized((goal,), timeout_s, grasp_diameter_m=diameter_m)
+        return True
+
     def _move_sequence_to_normalized(
         self,
         targets: tuple[dict[str, float], ...],
         timeout_s: float,
+        *, intervals_s=None, velocity_limits_rad_s=None,
+        tracking_tolerance_rad=None, velocity_tolerance_rad_s=None,
+        grasp_diameter_m=None, gripper_width_watch=None,
     ) -> None:
         timeout_s = self._positive_number(timeout_s, "timeout_s")
         with self._lock:
+            deadline = time.monotonic() + timeout_s
             self._ensure_authenticated(require_control=True)
             self.verify_gripper_torque()  # before acquiring any jog session
+            if time.monotonic() >= deadline:
+                raise PiperWebError("Timed out waiting for motion: authentication/torque check")
             keepalive = self._start_estop_keepalive()
             started = False
             operation_error: Exception | None = None
@@ -374,20 +422,65 @@ class PiperStudio:
                         or start_result.get("running") is not True
                         or start_result.get("iface") != self._iface):
                     raise PiperWebError("Piper Web did not confirm ownership of the jog session")
-                deadline = time.monotonic() + timeout_s
-                for target in targets:
+                previous, _ = self._read_raw_state()
+                sampled_at = time.monotonic()
+                last_sent = sampled_at
+                last_width, stable_since = None, sampled_at
+                def sample_checked():
+                    nonlocal previous, sampled_at
+                    state = self._read_raw_state()
+                    now = time.monotonic()
+                    if velocity_limits_rad_s is not None and now > sampled_at:
+                        if any(abs(a-b)/(now-sampled_at) > v+velocity_tolerance_rad_s
+                               for a, b, v in zip(state[0], previous, velocity_limits_rad_s)):
+                            raise PiperWebError('measured joint velocity exceeded the configured limit')
+                    if gripper_width_watch is not None:
+                        closed, opened = self.cfg['gripper_width_range_m']
+                        width = closed + state[1]/100 * (opened-closed)
+                        anchor, tolerance = gripper_width_watch
+                        if abs(width-anchor) > tolerance:
+                            raise PiperWebError('gripper width changed during held-apple motion')
+                    previous, sampled_at = state[0], now
+                    return state
+                for index, target in enumerate(targets):
+                    if intervals_s is not None:
+                        due = last_sent + intervals_s[index]
+                        while time.monotonic() < due:
+                            keepalive.check()
+                            sample_checked()
+                            now = time.monotonic()
+                            if now >= deadline:
+                                raise PiperWebError('timed trajectory exceeded its deadline')
+                            remaining = due - now
+                            if remaining <= 0:
+                                break  # Feedback may finish after the next goal becomes due.
+                            time.sleep(min(self._poll_interval_s, remaining))
+                    if time.monotonic() >= deadline:
+                        raise PiperWebError('Timed out waiting for trajectory: before sending next goal')
                     self.verify_gripper_torque()  # no cached assumption after a UI change
+                    if time.monotonic() >= deadline:
+                        raise PiperWebError('Timed out waiting for trajectory: torque check')
                     goal_result = self._request(
                         "POST", "/api/robots/jog/goal",
                         {"iface": self._iface, "values": target},
                     )
                     if not isinstance(goal_result, dict) or goal_result.get("status") != "ok":
                         raise PiperWebError("Piper Web did not confirm the joint goal")
+                    last_sent = time.monotonic()
+                    if last_sent >= deadline:
+                        raise PiperWebError('Timed out waiting for trajectory: goal acknowledgment')
                     target_rad = self._denormalize_joint_target(target)
+                    if intervals_s is not None and index < len(targets)-1:
+                        current, _ = sample_checked()
+                        if any(abs(a-b) > tracking_tolerance_rad for a, b in zip(current, target_rad)):
+                            raise PiperWebError('timed trajectory tracking error exceeded the configured limit')
+                        continue
                     while True:
                         keepalive.check()
                         self.verify_gripper_torque()
-                        current, gripper_position = self._read_raw_state()
+                        current, gripper_position = sample_checked()
+                        if time.monotonic() >= deadline:
+                            raise PiperWebError("Timed out waiting for trajectory: arrival feedback")
                         joints_reached = all(
                             abs(actual - expected) <= self._arrival_tolerance_rad
                             for actual, expected in zip(current, target_rad)
@@ -398,6 +491,16 @@ class PiperStudio:
                             or abs(gripper_position - target_gripper)
                             <= self._gripper_arrival_tolerance
                         )
+                        if grasp_diameter_m is not None:
+                            closed, opened = self.cfg['gripper_width_range_m']
+                            width = closed + gripper_position / 100 * (opened-closed)
+                            now = time.monotonic()
+                            if last_width is None or abs(width-last_width) > self._grasp_settings['contact_stability_m']:
+                                stable_since = now
+                                last_width = width
+                            near_fruit = abs(width-grasp_diameter_m) <= self._grasp_settings['contact_width_tolerance_m']
+                            settled = now-stable_since >= self._grasp_settings['contact_settle_s']
+                            gripper_reached = settled and (gripper_reached or near_fruit)
                         if joints_reached and gripper_reached:
                             keepalive.check()
                             break
@@ -638,14 +741,7 @@ class PiperStudio:
 
 
 class PiperStudioMotionTransport:
-    """Speed-aware motion transport built on top of PiperStudio.
-
-    Piper Web v0.5.9 does not expose per-goal speed control, so this transport
-    approximates deceleration by subdividing joint motion into smaller waypoint
-    steps when a lower speed_scale is requested. The actual robotd runtime still
-    decides the final servo profile, so simulation is required before treating
-    this as a verified slowdown contract.
-    """
+    """Timed joint commands with measured tracking/velocity supervision."""
 
     def __init__(
         self,
@@ -654,10 +750,15 @@ class PiperStudioMotionTransport:
         max_joint_step_rad: float,
         tool_pose_provider: Callable[[tuple[float, ...]], Pose3D] | None = None,
         in_hand_capture_provider: Callable[..., InHandCapture | None] | None = None,
+        motion_limits=None,
+        holding_verifier=None,
     ) -> None:
         self._studio = studio
         self._tool_pose_provider = tool_pose_provider
         self._in_hand_capture_provider = in_hand_capture_provider
+        self._motion_limits = motion_limits
+        self._holding_verifier = holding_verifier
+        self._held_width_m = None
         capture_fk = getattr(in_hand_capture_provider, "_tool_pose_fn", None)
         if capture_fk is not None and tool_pose_provider is not None and capture_fk is not tool_pose_provider:
             # 구 중심(검사)과 TCP 자세(복구·적재)가 다른 순기구학을 쓰면 서로 어긋난다 (PR #19)
@@ -665,9 +766,8 @@ class PiperStudioMotionTransport:
                 "in_hand_capture_provider and tool_pose_provider use different forward "
                 "kinematics callables; pass the same function to both so sphere centers match"
             )
-        self._max_joint_step_rad = PiperStudio._positive_number(
-            max_joint_step_rad, "max_joint_step_rad"
-        )
+        # Legacy constructor compatibility; timing is no longer based on spatial steps.
+        PiperStudio._positive_number(max_joint_step_rad, "max_joint_step_rad")
 
     def joint_state(self) -> tuple[float, ...]:
         return self._studio.joint_state()
@@ -679,12 +779,36 @@ class PiperStudioMotionTransport:
         speed_scale: float,
         timeout_s: float,
     ) -> bool:
-        waypoints = self._build_waypoints(position_rad, speed_scale=speed_scale)
-        if len(waypoints) == 1:
-            self._studio.send_joint_goal(position_rad, timeout_s)
-        else:
-            self._studio.send_joint_trajectory(waypoints, timeout_s)
+        return self.move_joint_trajectory((position_rad,), speed_scale=speed_scale, timeout_s=timeout_s)
+
+    def move_joint_trajectory(self, waypoints, *, speed_scale, timeout_s):
+        from aple.execution.timed_motion import time_parameterize
+        if self._motion_limits is None:
+            raise PiperWebError('measured motion limits are required for timed speed control')
+        if self._held_width_m is not None:
+            tolerance = self._studio._grasp_settings['contact_width_tolerance_m']
+            if abs(self.gripper_width_m()-self._held_width_m) > tolerance:
+                raise PiperWebError('gripper width changed after verified grasp')
+        start = self.joint_state()
+        goals = time_parameterize(start, waypoints, self._motion_limits, speed_scale=speed_scale)
+        if goals[-1].time_s > timeout_s:
+            raise PiperWebError('timed trajectory duration exceeds timeout before motion')
+        watch = None if self._held_width_m is None else (
+            self._held_width_m, self._studio._grasp_settings['contact_width_tolerance_m'])
+        self._studio.send_timed_joint_trajectory(goals, self._motion_limits,
+            speed_scale=speed_scale, timeout_s=timeout_s, gripper_width_watch=watch)
         return True
+
+    def confirm_holding(self, apple, apple_in_tcp, *, timeout_s):
+        if self._holding_verifier is None:
+            return False
+        confirmed = self._holding_verifier(apple, apple_in_tcp, timeout_s=timeout_s) is True
+        if confirmed:
+            self._held_width_m = self.gripper_width_m()
+        return confirmed
+
+    def close_for_grasp(self, apple, profile, effort, *, timeout_s):
+        return self._studio.close_for_grasp(apple.diameter_m, effort, timeout_s=timeout_s)
 
     def gripper_width_m(self) -> float:
         return self._studio.gripper_width_m()
@@ -692,6 +816,7 @@ class PiperStudioMotionTransport:
     def set_gripper_width(
         self, width_m: float, effort: int, *, timeout_s: float
     ) -> bool:
+        self._held_width_m = None
         joints = self._studio.joint_state()
         self._studio.send(
             ArmCommand(joints, width_m, effort, "scripted"),
@@ -728,32 +853,3 @@ class PiperStudioMotionTransport:
                 "in_hand_capture_provider must return InHandCapture or None"
             )
         return result
-
-    def _build_waypoints(
-        self,
-        target_rad: tuple[float, ...],
-        *,
-        speed_scale: float,
-    ) -> tuple[tuple[float, ...], ...]:
-        if len(target_rad) != len(JOINT_NAMES):
-            raise ValueError("joint_target_rad must contain exactly six joint angles")
-        target = tuple(float(value) for value in target_rad)
-        if not all(math.isfinite(value) for value in target):
-            raise ValueError("joint_target_rad must contain only finite values")
-        if not math.isfinite(speed_scale) or not 0 < speed_scale <= 1:
-            raise ValueError("speed_scale must be finite and in (0, 1]")
-
-        current = self._studio.joint_state()
-        max_delta = max(abs(end - start) for start, end in zip(current, target))
-        if max_delta == 0:
-            return (target,)
-        effective_step = max(self._max_joint_step_rad * speed_scale, 1e-6)
-        segment_count = max(1, math.ceil(max_delta / effective_step))
-        waypoints = []
-        for index in range(1, segment_count + 1):
-            fraction = index / segment_count
-            waypoint = tuple(
-                start + (end - start) * fraction for start, end in zip(current, target)
-            )
-            waypoints.append(waypoint)
-        return tuple(waypoints)

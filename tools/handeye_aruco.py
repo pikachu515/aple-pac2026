@@ -170,7 +170,8 @@ def detect_target(bgr: np.ndarray, target: Target) -> tuple[np.ndarray, np.ndarr
     flat = [int(i) for i in ids.ravel()]
     if any(flat.count(i) > 1 for i in flat if i in target.ids):
         return None                                    # 같은 표적이 두 장 보인다 — 어느 것인지 모른다
-    keep = [k for k, i in enumerate(flat) if i in target.ids]
+    allowed = set(getattr(target, "only_ids", None) or target.ids)
+    keep = [k for k, i in enumerate(flat) if i in allowed]
     if len(keep) < target.min_markers:
         return None
     corners = [corners[k] for k in keep]
@@ -208,9 +209,10 @@ def target_pose(obj: np.ndarray, img: np.ndarray, intrinsics, depth_m: np.ndarra
     """
     obj, img = np.asarray(obj, dtype=np.float64), np.asarray(img, dtype=np.float64)
     K = _K(intrinsics)
-    if len(obj) == 4:
+    canonical = len(obj) == 4 and np.allclose(obj[:, :2].mean(0), 0) and np.allclose(obj[:, 2], 0)
+    if canonical:
         ok, rvec, tvec = cv2.solvePnP(obj, img, K, None, flags=cv2.SOLVEPNP_IPPE_SQUARE)
-    else:
+    else:                                              # 보드, 또는 보드 좌표로 놓인 마커 하나(ChArUco 조각)
         ok, rvec, tvec = cv2.solvePnP(obj, img, K, None, flags=cv2.SOLVEPNP_IPPE)
         if ok:
             rvec, tvec = cv2.solvePnPRefineLM(obj, img, K, None, rvec, tvec)
@@ -460,6 +462,10 @@ def record_pose(snap, joints, fk, target: Target, use_depth: bool = True) -> dic
 def cmd_capture(args) -> None:
     session = load_session(args.session)
     target = Target.from_args(args)
+    if args.min_markers:
+        target.min_markers = args.min_markers         # 마커 하나짜리 조각 — 정확도는 fit 잔차로 판단
+    if args.only_ids:                                  # 손목 조각의 마커만 — 책상에 남은 같은 보드 조각을 무시
+        target.only_ids = [int(v) for v in args.only_ids.split(",")]
     if session["poses"] and session.get("target") != target.to_dict():
         raise SystemExit(f"세션의 표적이 다르다 ({session.get('target')}) — 다른 세션 파일을 쓴다")
     session["target"] = target.to_dict()
@@ -691,6 +697,8 @@ def main(argv: list[str] | None = None):
     c.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "handeye.json")
     c.add_argument("--save-images", action="store_true", help="자세마다 검출 표시 영상을 handeye_imgs/ 에 저장")
     c.add_argument("--auto", action="store_true", help="Enter 없이 팔이 멈추면 자동 기록")
+    c.add_argument("--min-markers", type=int, help="자세마다 필요한 최소 마커 수 (기본: 보드 2, 마커 1)")
+    c.add_argument("--only-ids", help="이 마커들만 쓴다 (예: 2) — 같은 보드의 다른 조각이 화면에 있을 때")
     c.add_argument("--still-s", type=float, default=1.0, help="--auto: 이만큼 멈추면 기록 (s)")
     c.add_argument("--still-deg", type=float, default=0.3, help="--auto: 멈춤 판정 관절 흔들림 상한 (deg)")
     c.add_argument("--min-move-mm", type=float, default=40.0, help="--auto: 이전 자세와 최소 위치 차")

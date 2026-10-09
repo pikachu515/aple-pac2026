@@ -11,6 +11,7 @@ import pytest
 from aple.config import CONFIG_DIR
 from aple.hal.calibration import (base_to_pixel, camera_point_at, fit_touch_points, load_T_base_camera,
                                   rpy_to_matrix, tip_from_flange)
+from tests.conftest import pristine_copy
 from tests.test_perception import INTR, make_T, render
 from tools import touch_calib
 
@@ -72,8 +73,7 @@ def test_save_refused_with_warnings_unless_forced(tmp_path):
     base = MARKERS.copy()
     base[3] += [0.02, -0.015, 0.0]
     session = run_session(tmp_path, make_T(), base)
-    workcell = tmp_path / "workcell.yaml"
-    shutil.copy(CONFIG_DIR / "workcell.yaml", workcell)
+    workcell = pristine_copy("workcell.yaml", tmp_path / "workcell.yaml")
     with pytest.raises(SystemExit):
         touch_calib.main(["fit", "--session", str(session), "--save", str(workcell)])
     with pytest.raises(ValueError):

@@ -3,8 +3,8 @@
 workcell:
   expected_apple_count: 5
   frames: {base: base_link, camera: camera_top_optical_frame, tcp: tcp}
-  T_base_camera: null           # 4x4, eye-to-hand 캘리브레이션 결과 (m)
-  tcp_offset_m: null            # 핑거 어댑터 반영
+  T_base_camera: [[0.084998, 0.994558, -0.06024, 0.630268], [0.995949, -0.083025, 0.034542, -0.08884], [0.029352, -0.062932, -0.997586, 0.941507], [0, 0, 0, 1]] # [임시] 10/9 touch_calib 8점 RMS 5.2 mm·LOO 중앙 6.5 mm (data/calib/touch_1009b.json). ArUco hand-eye 로 교체 예정
+  tcp_offset_m: [-0.0301, -0.0081, 0.2048] # [임시] touch_calib 에서 T_base_camera 와 함께 푼 값 (자 실측 143 mm 와 다름 — 보정과 실행에 같은 값을 써야 오차가 상쇄된다)
   tray:                         # base_link 축 정렬 사각형
     center_m: null              # [x, y, z] 트레이 바닥 윗면 중심 (m), 현장 실측. null 이면 영상 전체에서 검출
     size_m: [0.3, 0.2]

@@ -18,6 +18,7 @@ from aple.hal.calibration import (base_to_pixel, fit_rigid_transform, load_T_bas
                                   save_T_base_camera, solve_eye_to_hand, validate_T)
 from aple.perception import box_occupancy, detector, pose_estimator
 from aple.perception.sim_scene import INTR, SIZE, box_tops, camera_looking_down
+from tests.conftest import pristine_copy
 from aple.perception.sim_scene import render as sim_render
 from aple.planning.placement_planner import PlacementPlanner
 from aple.schema import (CaptureMode, Grade, GradeResult, InspectMode, RejectReason, SceneSnapshot, Source)
@@ -80,8 +81,7 @@ def test_validate_rejects_non_rigid():
 
 
 def test_save_and_load_T_in_workcell_yaml(tmp_path):
-    path = tmp_path / "workcell.yaml"
-    shutil.copy(CONFIG_DIR / "workcell.yaml", path)
+    path = pristine_copy("workcell.yaml", tmp_path / "workcell.yaml")
     with pytest.raises(ValueError, match="캘리브레이션"):
         load_T_base_camera(str(path))
     T = make_T(0.05)

@@ -6,6 +6,8 @@ execution:
   placement_verify: {height_tol_m: 0.010}   # PLACEHOLDER: 깊이 노이즈 실측 후 교체
   trajectory: {max_joint_step_rad: 0.05, max_cartesian_step_m: null} # [선택] null: 기존 관절 보간; m 값: TCP 중간 목표 추가
   motion:                      # 실기 시간 기준 궤적. 모두 현장 제어·추종 측정 후 입력
+    speed_trial_steps: [0.5, 0.6, 0.7, 0.8] # 전체 실기 성공 후 다음 시험 후보만 안내. 자동 변경 없음
+    empty_speed_scale: 1.0     # 확인된 빈손 접근·후퇴·scan: 실측 속도/가속도 한도까지. 물체 근처 하강·복구는 기존 속도
     velocity_limits_rad_s: null # 관절별 6개
     acceleration_limits_rad_s2: null
     command_period_s: null

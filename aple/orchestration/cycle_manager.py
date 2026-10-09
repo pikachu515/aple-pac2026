@@ -38,6 +38,8 @@ class CycleManager:
         reset: Callable[[], None] | None = None,
         logger: MetricsLogger | None = None,
         dry_run: bool = False,
+        failure_records: Callable | None = None,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         if not isinstance(cfg, dict):
             raise TypeError("cfg must be a dict")
@@ -56,6 +58,11 @@ class CycleManager:
         if not dry_run and execute_scene is None:
             raise ValueError("live execution requires an execute_scene callback")
 
+        for callback in (failure_records, stop_requested):
+            if callback is not None and not callable(callback):
+                raise TypeError("failure_records and stop_requested must be callable")
+        self._failure_records = failure_records
+        self._stop_requested = stop_requested
         self.cfg = cfg
         self.dry_run = dry_run
         self._capture = dry_run_capture if dry_run else capture
@@ -88,31 +95,47 @@ class CycleManager:
         """Run a bounded number of cycles and return their per-apple records.
 
         A failed robot operation is recorded by ``make_records``; it does not
-        silently trigger another pick. Retry/rescan policy remains in the
-        injected stage callbacks until the team agrees on its recovery contract.
+        silently trigger another pick. MissionController owns bounded retries.
+        Optional failure_records persists operational exceptions; stop_requested
+        prevents subsequent capture/reset motion after a mission halt.
         """
         if isinstance(cycles, bool) or not isinstance(cycles, int) or cycles <= 0:
             raise ValueError("cycles must be a positive integer")
 
         records: list[CycleRecord] = []
         for cycle_index in range(1, cycles + 1):
-            capture_started = time.monotonic()
-            snapshot = self._capture()
-            capture_duration = time.monotonic()-capture_started
-            if not isinstance(snapshot, SceneSnapshot):
-                raise TypeError("capture provider must return a SceneSnapshot")
-
-            plan = self._plan_scene(snapshot)
-            timings = getattr(plan, 'timings', None)
-            if isinstance(timings, dict):
-                # SceneRunner exposes mutable timing metadata without changing schema.
-                timings['t_scan_s'] = timings.get('t_scan_s', 0.0) + capture_duration
-            execution = None
-            if not self.dry_run:
-                assert self._execute_scene is not None
-                execution = self._execute_scene(plan)
-
-            cycle_records = self._make_records(snapshot, plan, execution)
+            if self._stop_requested is not None and self._stop_requested():
+                break
+            snapshot, plan = None, None
+            stage = 'capture'
+            cycle_started = time.monotonic()
+            try:
+                capture_started = cycle_started
+                snapshot = self._capture()
+                capture_duration = time.monotonic()-capture_started
+                if not isinstance(snapshot, SceneSnapshot):
+                    snapshot = None
+                    raise TypeError("capture provider must return a SceneSnapshot")
+                stage = 'plan'
+                plan = self._plan_scene(snapshot)
+                timings = getattr(plan, 'timings', None)
+                if isinstance(timings, dict):
+                    timings['t_scan_s'] = timings.get('t_scan_s', 0.0) + capture_duration
+                execution = None
+                if not self.dry_run:
+                    stage = 'execute'
+                    assert self._execute_scene is not None
+                    execution = self._execute_scene(plan)
+                stage = 'records'
+                cycle_records = self._make_records(snapshot, plan, execution)
+            except Exception as exc:
+                if self._failure_records is None:
+                    raise
+                cycle_records = self._failure_records(snapshot, plan, stage, exc)
+                elapsed = time.monotonic()-cycle_started
+                cycle_records = [replace(r, t_total_s=elapsed/len(cycle_records),
+                    t_scan_s=elapsed/len(cycle_records) if stage == 'capture' else r.t_scan_s)
+                    for r in cycle_records]
             if not isinstance(cycle_records, Sequence) or isinstance(
                 cycle_records, (str, bytes)
             ):
@@ -123,7 +146,7 @@ class CycleManager:
             for record in cycle_records:
                 if not isinstance(record, CycleRecord):
                     raise TypeError("make_records may only return CycleRecord values")
-                if record.scene_id != snapshot.scene_id:
+                if record.scene_id != (0 if snapshot is None else snapshot.scene_id):
                     raise ValueError(
                         "CycleRecord scene_id must match the captured SceneSnapshot"
                     )
@@ -132,7 +155,19 @@ class CycleManager:
                     self._logger.write(indexed)
                 records.append(indexed)
 
+            if self._stop_requested is not None and self._stop_requested():
+                break
             if not self.dry_run and self._reset is not None:
-                self._reset()
+                try:
+                    self._reset()
+                except Exception as exc:
+                    if self._failure_records is None:
+                        raise
+                    for row in self._failure_records(snapshot, plan, 'reset', exc):
+                        indexed = replace(row, cycle_index=cycle_index)
+                        if self._logger is not None:
+                            self._logger.write(indexed)
+                        records.append(indexed)
+                    break
 
         return records

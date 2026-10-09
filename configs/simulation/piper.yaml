@@ -38,6 +38,8 @@ grasp_planner:
   yaw_step_deg: 180
 execution:
   default_backend: scripted
+  motion:
+    empty_speed_scale: null # Baseline virtual transport keeps its ordinary speed cap.
 inspection:
   policy: NEVER
 piper_web:

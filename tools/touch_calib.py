@@ -30,7 +30,8 @@
                --iface can0 으로 팔로워를 주거나, piper_web.enabled 와 iface 를 설정해 둔다.
                팔로워는 리더암 텔레오퍼레이션(Studio 릴레이)으로 표식에 댄다.
                piper_robot 은 PYTHONPATH 로 (docs/simulation.md)
-  4. 맞추고 점검한 뒤 저장한다
+  4. 맞추고 점검한 뒤 저장한다 (--auto 로 찍었으면 플랜지 자세가 남아 있어 끝점 오프셋을 함께 풀 수 있다:
+       fit --solve-tcp --tcp-guess 0,0,143 — 점마다 손목 방향이 조금씩 달라야 오프셋이 정해진다)
        python tools/touch_calib.py fit --session data/calib/touch.json                  # 결과만 보기
        python tools/touch_calib.py fit --session ... --drop P4                          # 의심 점 빼기
        python tools/touch_calib.py fit --session ... --holdout P8                       # P8 은 검증용으로만
@@ -104,8 +105,57 @@ def parse_robot_entry(text: str, tcp_offset_m) -> list[float] | None:
     raise ValueError("숫자 3개(x y z mm) 또는 6개(x y z mm, rx ry rz deg)를 넣는다")
 
 
-def fit_session(session: dict, drop=(), holdout=()) -> tuple:
-    """→ (TouchFit, 맞춤에 쓴 점 목록, [(검증 점, 오차 m)])."""
+def fit_with_tcp(points_cam, flanges, t_prior, prior_weight: float = 0.001, iters: int = 200):
+    """T_base_camera 와 끝점 오프셋 t (플랜지 좌표계) 를 함께 맞춘다. → (T, t).
+
+    끝점 base = R_i · t + p_i (R_i, p_i: 점 i 를 찍을 때의 플랜지 자세) = R_c · c_i + p_c.
+    R_c 를 고정하면 (p_c, t) 는 선형이므로 Kabsch ↔ 선형 최소제곱을 번갈아 푼다.
+    점마다 손목 방향이 같으면 t 는 p_c 와 구분되지 않는다 — prior_weight 로 t_prior 쪽에 묶는다.
+    """
+    from aple.hal.calibration import fit_rigid_transform
+    C = np.asarray(points_cam, dtype=np.float64)
+    F = [np.asarray(T, dtype=np.float64) for T in flanges]
+    t = np.asarray(t_prior, dtype=np.float64).copy()
+    w = np.sqrt(prior_weight * len(C))
+    for _ in range(iters):
+        tips = np.array([T[:3, :3] @ t + T[:3, 3] for T in F])
+        T_bc, _ = fit_rigid_transform(C, tips)
+        Rc = T_bc[:3, :3]
+        A = np.zeros((3 * len(C) + 3, 6))
+        b = np.zeros(3 * len(C) + 3)
+        for i, (c, T) in enumerate(zip(C, F)):
+            A[3 * i:3 * i + 3, :3] = np.eye(3)               # p_c
+            A[3 * i:3 * i + 3, 3:] = -T[:3, :3]              # −R_i t
+            b[3 * i:3 * i + 3] = T[:3, 3] - Rc @ c
+        A[-3:, 3:] = w * np.eye(3)
+        b[-3:] = w * np.asarray(t_prior, dtype=np.float64)
+        t_new = np.linalg.lstsq(A, b, rcond=None)[0][3:]
+        if np.linalg.norm(t_new - t) < 1e-7:
+            t = t_new
+            break
+        t = t_new
+    tips = np.array([T[:3, :3] @ t + T[:3, 3] for T in F])
+    T_bc, _ = fit_rigid_transform(C, tips)
+    return T_bc, t
+
+
+def tcp_for_fit(session: dict, cfg_offset, guess=None) -> tuple[np.ndarray | None, str]:
+    """맞춤에 쓸 끝점 오프셋과 출처. 세션 피벗 결과 > workcell.yaml > --tcp-guess(함께 풀 때 시작값)."""
+    if session.get("tcp_offset_m") is not None:
+        return np.asarray(session["tcp_offset_m"], dtype=float), "피벗 보정"
+    if cfg_offset is not None and np.any(np.asarray(cfg_offset) != 0):
+        return np.asarray(cfg_offset, dtype=float), "workcell.yaml"
+    if guess is not None:
+        return np.asarray(guess, dtype=float), "--tcp-guess"
+    return None, ""
+
+
+def fit_session(session: dict, drop=(), holdout=(), *, tcp=None, solve_tcp: bool = False) -> tuple:
+    """→ (TouchFit, 맞춤에 쓴 점 목록, [(검증 점, 오차 m)]).
+
+    모든 점에 플랜지 자세(flange_T, robot --auto 가 기록)가 있으면 끝점 = R·tcp + p 로 다시 계산한다.
+    solve_tcp 면 tcp 를 시작값으로 T_base_camera 와 함께 푼다 (session["fit"]["tcp_offset_m"]).
+    """
     unknown = (set(drop) | set(holdout)) - {p["name"] for p in session["points"]}
     if unknown:
         raise SystemExit(f"세션에 없는 점: {sorted(unknown)}")
@@ -113,6 +163,16 @@ def fit_session(session: dict, drop=(), holdout=()) -> tuple:
     used = [p for p in done if p["name"] not in drop and p["name"] not in holdout]
     if len(used) < 3:
         raise SystemExit(f"로봇 좌표까지 있는 점이 {len(used)}개다 — 3개 이상 (권장 6~10개) 필요")
+    if all(p.get("flange_T") for p in done) and (tcp is not None or solve_tcp):
+        t = np.zeros(3) if tcp is None else np.asarray(tcp, dtype=float)
+        if solve_tcp:
+            _, t = fit_with_tcp([p["cam_m"] for p in used], [p["flange_T"] for p in used], t)
+        for p in done:
+            T = np.asarray(p["flange_T"], dtype=float)
+            p["base_m"] = [round(float(v), 5) for v in T[:3, :3] @ t + T[:3, 3]]
+        session["fit_tcp_offset_m"] = [round(float(v), 5) for v in t]
+    elif solve_tcp:
+        raise SystemExit("--solve-tcp 는 robot --auto 로 플랜지 자세(flange_T)를 기록한 점에서만 된다")
     fit = fit_touch_points([p["cam_m"] for p in used], [p["base_m"] for p in used])
     checks = []
     for p in done:
@@ -301,11 +361,13 @@ def cmd_pivot(args) -> None:
         warn.append("잔차 중앙값이 3 mm 를 넘는다 — 기록 중에 끝이 미끄러졌을 수 있다")
     for w in warn:
         print(f"[경고] {w}")
+    session["pivot"] = {"flanges": [T.round(6).tolist() for T in flanges], "residuals_m": res.round(5).tolist(),
+                        "offset_m": [round(float(v), 5) for v in t], "warnings": warn}
     if warn and not args.force:
-        print("저장하지 않았다 (--force 로 저장)")
+        save_session(args.session, session)          # 기록은 남긴다 — 오프셋은 쓰지 않는다
+        print("오프셋은 저장하지 않았다 (--force 로 저장). 자세 기록은 세션 pivot 에 남겼다")
         return
     session["tcp_offset_m"] = [round(float(v), 5) for v in t]
-    session["pivot"] = {"flanges": [T.round(6).tolist() for T in flanges], "residuals_m": res.round(5).tolist()}
     save_session(args.session, session)
     print(f"세션에 저장: {args.session} (robot 단계가 이 오프셋을 쓴다)")
     if args.save:
@@ -343,8 +405,14 @@ def cmd_robot(args) -> None:
                 if args.auto:
                     if text:                          # 자동 모드에서도 숫자를 넣으면 그 값을 쓴다
                         base = parse_robot_entry(text, offset)
+                        p.pop("flange_T", None)
                     else:
-                        base = [float(v) for v in tip_from_flange(fk(studio.joint_state()), offset)]
+                        T = np.asarray(fk(studio.joint_state()), dtype=float)
+                        base = [float(v) for v in tip_from_flange(T, offset)]
+                        # 끝점 오프셋은 나중에(fit --solve-tcp) 바뀔 수 있다 — 플랜지 자세 전체를 남긴다
+                        p["flange_T"] = T.round(6).tolist()
+                        tilt = float(np.degrees(np.arccos(np.clip(-T[2, 2], -1, 1))))
+                        print(f"  툴 기울기 {tilt:.0f}° (수직 0°)")
                 else:
                     base = parse_robot_entry(text, offset)
             except ValueError as e:
@@ -362,7 +430,15 @@ def cmd_robot(args) -> None:
 
 def cmd_fit(args) -> TouchFit:
     session = load_session(args.session)
-    fit, used, checks = fit_session(session, args.drop, args.holdout)
+    guess = [float(v) / 1000 for v in args.tcp_guess.split(",")] if args.tcp_guess else None
+    tcp, source = tcp_for_fit(session, load_config()["workcell"].get("tcp_offset_m"), guess)
+    if args.solve_tcp and tcp is None:
+        tcp, source = np.zeros(3), "0"
+    fit, used, checks = fit_session(session, args.drop, args.holdout, tcp=tcp, solve_tcp=args.solve_tcp)
+    if session.get("fit_tcp_offset_m") is not None:
+        t = np.asarray(session["fit_tcp_offset_m"])
+        how = f"함께 풂 (시작값 {source})" if args.solve_tcp else source
+        print(f"끝점 오프셋 {_mm(t)} — 길이 {np.linalg.norm(t) * 1000:.1f} mm [{how}]")
     print(f"{'점':<5}{'픽셀':>14}{'잔차 mm':>10}{'LOO mm':>10}")
     for p, res, loo in zip(used, fit.residuals_m, fit.loo_errors_m):
         loo_s = f"{loo * 1000:.1f}" if np.isfinite(loo) else "-"
@@ -385,6 +461,10 @@ def cmd_fit(args) -> TouchFit:
             raise SystemExit("경고가 있어 저장하지 않았다 — 확인 후 --force 로 저장하거나 점을 다시 잰다")
         line = save_T_base_camera(str(args.save), fit.T)
         print(f"저장: {args.save}\n  {line[:100]}...")
+        if args.save_tcp and session.get("fit_tcp_offset_m") is not None:
+            from aple.config import set_config_value
+            print("  " + set_config_value(str(args.save), "workcell.tcp_offset_m", session["fit_tcp_offset_m"],
+                                          note="touch_calib fit").strip())
     return fit
 
 
@@ -424,6 +504,10 @@ def main(argv: list[str] | None = None):
     f.add_argument("--holdout", nargs="*", default=[], help="맞춤에 쓰지 않고 검증 오차만 볼 점")
     f.add_argument("--save", type=Path, help="T_base_camera 를 쓸 workcell.yaml")
     f.add_argument("--force", action="store_true", help="경고가 있어도 저장")
+    f.add_argument("--solve-tcp", action="store_true",
+                   help="끝점 오프셋을 T_base_camera 와 함께 푼다 (robot --auto 로 플랜지 자세를 기록한 경우)")
+    f.add_argument("--tcp-guess", help="끝점 오프셋 시작값/가정 'x,y,z' mm (예: 0,0,143)")
+    f.add_argument("--save-tcp", action="store_true", help="--save 때 맞춘 끝점 오프셋도 workcell.tcp_offset_m 에 쓴다")
 
     args = ap.parse_args(argv)
     return {"grab": cmd_grab, "mark": cmd_mark, "robot": cmd_robot, "pivot": cmd_pivot, "fit": cmd_fit}[args.cmd](args)

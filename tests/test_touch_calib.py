@@ -272,3 +272,55 @@ def test_pivot_command_saves_offset_and_robot_uses_it(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda _: "")
     touch_calib.main(["robot", "--session", str(session_path), "--auto", "--iface", "can0"])
     assert touch_calib.load_session(session_path)["points"][0]["base_m"] == pytest.approx(x, abs=1e-4)
+
+
+# ---------------------------------------------------------------- 끝점 오프셋을 카메라 보정과 함께 풀기
+
+def _touch_with_flanges(t, T_bc, tilts, seed=0, noise_m=0.0005):
+    """끝점이 표식에 닿을 때의 플랜지 자세(점마다 손목이 조금씩 기운다)와 카메라 좌표."""
+    rng = np.random.default_rng(seed)
+    down = _rot([1, 0, 0], 180)
+    pts = [np.array([0.20 + 0.06 * (i % 4), -0.12 + 0.08 * (i // 4), 0.0 if i % 3 else 0.08]) for i in range(len(tilts))]
+    cams, flanges = [], []
+    for x, (axis, deg) in zip(pts, tilts):
+        R = _rot(axis, deg) @ down
+        F = np.eye(4); F[:3, :3] = R; F[:3, 3] = x - R @ t
+        flanges.append(F)
+        cams.append(np.linalg.inv(T_bc)[:3, :3] @ x + np.linalg.inv(T_bc)[:3, 3] + rng.normal(0, noise_m, 3))
+    return cams, flanges
+
+
+def _cam_pose():
+    """카메라가 로봇 앞 위에서 약간 기운 채 아래를 본다 (10/9 실기와 비슷)."""
+    T = np.eye(4)
+    T[:3, :3] = _rot([0, 0, 1], -4) @ _rot([0, 1, 0], 3) @ _rot([1, 0, 0], 180)
+    T[:3, 3] = [0.55, -0.15, 0.95]
+    return T
+
+
+SOLVE_TILTS = [([1, 0, 0], 12), ([0, 1, 0], -15), ([1, 1, 0], 20), ([0, 1, 0], 10), ([1, 0, 0], -18),
+               ([1, -1, 0], 14), ([0, 1, 0], 22), ([1, 0, 0], 5), ([0, 0, 1], 30)]
+
+
+def test_fit_with_tcp_recovers_lateral_offset():
+    """옆 방향 오프셋은 손목 기울기로 정해진다. 툴 축 길이는 거의 수직으로 찍으면 정해지지 않으므로
+    실측값(시작값)을 그대로 쓴다 — 보정과 실행에 같은 값을 쓰면 그 오차는 상쇄된다."""
+    t = np.array([0.004, -0.002, 0.143])
+    T_bc = _cam_pose()
+    cams, flanges = _touch_with_flanges(t, T_bc, SOLVE_TILTS)
+    T_est, t_est = touch_calib.fit_with_tcp(cams, flanges, np.array([0, 0, 0.143]))
+    assert t_est == pytest.approx(t, abs=0.0015)                             # 표식 0.5 mm 잡음
+    assert T_est[:3, 3] == pytest.approx(T_bc[:3, 3], abs=0.002)
+
+
+def test_fit_session_with_flanges_beats_flange_only():
+    t = np.array([0.0, 0.0, 0.143])
+    cams, flanges = _touch_with_flanges(t, _cam_pose(), SOLVE_TILTS)
+    session = {"points": [{"name": f"P{i + 1}", "pixel": [0, 0], "cam_m": list(c), "flange_T": F.tolist(),
+                           "base_m": list(F[:3, 3])} for i, (c, F) in enumerate(zip(cams, flanges))]}
+    flange_only, _, _ = touch_calib.fit_session(json.loads(json.dumps(session)))
+    assert flange_only.rms_m > 0.02                                          # 10/9 실기와 같은 실패: 손목 기울기 × 14 cm
+    fixed, _, _ = touch_calib.fit_session(json.loads(json.dumps(session)), tcp=[0, 0, 0.143])
+    assert fixed.rms_m < 0.003                                               # 실측 길이 + 플랜지 자세면 충분
+    solved, _, _ = touch_calib.fit_session(session, tcp=[0, 0, 0.143], solve_tcp=True)
+    assert solved.rms_m < 0.003 and session["fit_tcp_offset_m"] == pytest.approx(t, abs=0.002)

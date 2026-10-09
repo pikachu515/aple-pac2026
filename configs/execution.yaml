@@ -49,8 +49,8 @@ piper_web:
   request_timeout_s: 3.0
   goal_timeout_s: 20.0
   poll_interval_s: 0.1
-  arrival_tolerance_rad: 0.017453292519943295
-  gripper_arrival_tolerance: 2.0
+  arrival_tolerance_rad: 0.0524   # [현장 10/10] 3° — 집는 자리에서 핑거가 트레이·사과에 닿아 1° 남짓 못 미쳐 도착 확인 시간 초과
+  gripper_arrival_tolerance: 25.0   # [현장 10/10] % — 이 그리퍼는 기구적으로 약 79% 까지만 열린다 (열림 명령 100% → 21% 차로 도착 확인 시간 초과). 집을 때 열림 목표 81% → 74% 에서 멈춤도 포함
   camera_id: "rs:243122071248:color"  # [제안 10/9 — 역할 B 확인] Studio 카메라 id (10/9 확인)
   robotd_safety_confirmed: false
   joint_limits_deg:

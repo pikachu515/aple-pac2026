@@ -118,16 +118,22 @@ class PlacementPlanner:
         ]
         hover_base_z = max([box.wall_height_m, z, *adjacent_heights])
         release_z = z + radius_m + release_gap_m
+        if self.cfg["workcell"]["placement"].get("release_above_wall"):
+            # 10/10 실기: 상자 칸(9 cm)이 사과(8.2 cm) + 핑거 벌림보다 좁아 칸 바닥까지 내리면 핑거가 벽에 닿는다 →
+            # 사과 아래가 벽 높이 + release_gap 에 오게 놓고 떨어뜨린다 (골판지 바닥, max_drop_m 이내)
+            release_z = max(release_z, box.wall_height_m + radius_m + release_gap_m)
+            if release_z - (z + radius_m) > max_drop_m:
+                return self._infeasible(apple, grade)
         hover_z = max(hover_base_z + radius_m + margin_m, release_z + margin_m)
         plan = PlacementPlan(
             scene_id=apple.scene_id,
             apple_id=apple.apple_id,
             box_id=grade.grade,
             cell_index=cell_index,
-            place_center_m=(x, y, z + radius_m + release_gap_m),
+            place_center_m=(x, y, release_z),
             hover_z_m=hover_z,
             release_z_m=release_z,
-            planned_drop_m=release_gap_m,
+            planned_drop_m=release_z - (z + radius_m),
             feasible=True,
         )
         self.reserved.add((int(grade.grade), cell_index))

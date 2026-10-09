@@ -22,8 +22,9 @@ workcell:
   # assign: {이름: 쪽} — 쪽은 left|right|top|bottom (카메라 영상) 또는 +x|-x|+y|-y (base). 대회장이 상·중을 반대로 정하면
   # 이 한 줄만 바꾼다: {UPPER: right, MIDDLE: left}. 그 밖의 키(색 범위·크기·max_yaw_deg 등) 기본값은 코드 _DEFAULTS
   auto_detect: {enabled: true, assign: {UPPER: left, MIDDLE: right}, flat_zone: REJECT}   # [실측 10/9 최종 배치]
-  # [현장 10/10] release_above_wall: 칸(9 cm)이 핑거 벌림보다 좁아 벽 높이 위에서 놓는다 → 떨어지는 높이 ≈ 벽 높이(6.5~8 cm)
-  placement: {max_drop_m: 0.10, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near, release_above_wall: true}
+  # [현장 10/10 05:00] release_above_wall 끔·max_drop 0.10 → 0.03 원복: 벽 위에서 놓으면 6~11 cm 낙하로 사과가 상한다(팀 결정).
+  # 들고 벽을 넘어 상자 안으로 내려가 놓는다. 내려가는 동안 핑거–벽 충돌은 경로 검사가 상자 벽을 장애물로 넣어 본다
+  placement: {max_drop_m: 0.03, margin_m: 0.01, release_gap_m: 0.01, fill_order: far_to_near, release_above_wall: false}
   poses:                        # 현장에서 텔레오퍼레이션으로 자세를 잡고 tools/teach_pose.py <이름> 으로 저장
     home_joint_rad: [0.0, 0.0, 0.0, 0.0, 0.3971, 0.0] # [제안 10/9 — Studio 파킹 자세(INITIALIZE_POSITION), 접힌 자세라 탑뷰를 가리지 않음 — 역할 B 확인]
     scan_joint_rad: [0.0, 0.0, 0.0, 0.0, 0.3971, 0.0] # [제안 10/9 — Studio 파킹 자세(INITIALIZE_POSITION), 접힌 자세라 탑뷰를 가리지 않음 — 역할 B 확인]

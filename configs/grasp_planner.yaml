@@ -5,14 +5,14 @@ grasp_planner:
   open_margin_m: 0.01             # [임시] 핑거 안쪽 면 ↔ 사과 표면 여유 (사전 개방 폭 = 직경 + 2 × 이 값)
   finger_thickness_m: 0.012       # [임시] 핑거 + 어댑터 + 패드 두께 (닫힘 방향)
   finger_width_m: 0.02            # [임시] 핑거 폭 (닫힘 방향에 수직)
-  min_clearance_m: 0.0             # [현장 10/10] 4 → 0 mm: 붙여 놓은 사과 4개가 틈 0~3 mm 로 전부 보류됐다
+  min_clearance_m: -0.005          # [현장 10/10 04:50] 0 → -5 mm: 핑거 발자국 원 모델이 실제보다 크다 — 리더암으로는 벽·이웃에 안 걸리는 사과 2개가 보류됐다
   approach_height_m: 0.08         # 집기 전 자세 = 집는 자세 위 이 높이
   tool_down_rpy_deg: [180, 0, 0]  # [임시] TCP 가 아래를 보는 자세 (base_link RPY). 역할 B IK 규약과 맞춘다
   max_clearance_m: 0.2
   # 붙은 사과 사이로 핑거를 넣는다 (10/9 실기: 사과를 붙여 놓은 줄)
   min_open_margin_m: 0.003        # [임시 10/9] 틈이 좁으면 한쪽 여유를 open_margin_m 에서 이 값까지 줄인다
   adaptive_open: true             # [임시 10/9] 그리퍼를 후보가 정한 폭(사과 + 2 × 여유)만큼만 벌린다
-  tilt_yaw_dev_deg: 30            # [임시 10/9] 기울여 잡을 때 접선에서 ±이 각도까지 돌려 틈을 찾는다
+  tilt_yaw_dev_deg: 60            # [현장 10/10 04:50] 30 → 60: 기울여 잡을 때 닫는 방향 허용을 넓힌다 — 트레이 벽 쪽 사과가 ±30° 안에서는 전부 막혔다
   tilt_yaw_free_below_deg: 12     # [임시 10/9] 기울기 12° 미만이면 어느 방향으로든 닫는다 (두 핑거 높이 차 ≤ 2r·sin12° ≈ 17 mm)
   tray_wall_margin_m: 0.0         # 트레이 사각형을 이만큼 넓혀 벽으로 본다
   tray_open_sides: [x_min]        # [10/9 배치] 집는 영역의 로봇 쪽 변은 흰 종이(리젝트)와 맞닿아 벽이 없다

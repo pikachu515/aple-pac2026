@@ -80,7 +80,8 @@ def grasp_cfg(adaptive):
     c = copy.deepcopy(load_config())
     c["workcell"]["tray"].update(center_m=[0.30, 0.0, 0.0], size_m=[0.10, 0.50])   # x 쪽은 벽이 가깝다
     c["grasp_planner"].update(min_open_margin_m=0.003 if adaptive else 0.01, adaptive_open=adaptive,
-                              tilt_start_m=None, yaw_step_deg=90)   # yaw 0°(x)·90°(y) 두 방향만
+                              tilt_start_m=None, yaw_step_deg=90,   # yaw 0°(x)·90°(y) 두 방향만
+                              min_clearance_m=0.0)   # 틈 기하는 간격 0 기준 — 현장 설정(10/10 -5 mm)과 무관하게 고정
     return c
 
 

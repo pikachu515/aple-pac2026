@@ -15,6 +15,8 @@ class MotionLimits:
     period_s: float
     tracking_tolerance_rad: float
     velocity_tolerance_rad_s: float
+    # 추종 오차는 최근 이 시간 안에 보낸 목표 중 가장 가까운 것과 잰다 — Studio 릴레이·모터 응답 지연만큼은 뒤처져도 된다
+    tracking_lag_s: float = 0.5
 
     def __post_init__(self):
         for name in ('velocity_rad_s', 'acceleration_rad_s2'):
@@ -23,7 +25,7 @@ class MotionLimits:
                 raise ValueError(f'{name} requires six joint limits')
             for value in values:
                 positive(value, name)
-        for name in ('period_s', 'tracking_tolerance_rad', 'velocity_tolerance_rad_s'):
+        for name in ('period_s', 'tracking_tolerance_rad', 'velocity_tolerance_rad_s', 'tracking_lag_s'):
             positive(getattr(self, name), name)
 
     @classmethod
@@ -36,7 +38,8 @@ class MotionLimits:
         return cls(vector('velocity_limits_rad_s'), vector('acceleration_limits_rad_s2'),
                    positive(settings.get('command_period_s'), 'command_period_s'),
                    positive(settings.get('tracking_tolerance_rad'), 'tracking_tolerance_rad'),
-                   positive(settings.get('velocity_tolerance_rad_s'), 'velocity_tolerance_rad_s'))
+                   positive(settings.get('velocity_tolerance_rad_s'), 'velocity_tolerance_rad_s'),
+                   positive(settings.get('tracking_lag_s', cls.tracking_lag_s), 'tracking_lag_s'))
 
 
 def positive(value, name):

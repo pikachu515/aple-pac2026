@@ -63,7 +63,13 @@ def detect(snap: SceneSnapshot, cfg: dict, *, model: BoxModel | None = None) -> 
     p = detect_params(cfg)
     ycfg = cfg.get("yolo", {})
     roi = work_roi(snap, cfg)
-    raised, f_px, z_ref, height = raised_mask(snap, roi, p)
+    tray = cfg.get("workcell", {}).get("tray", {})
+    T = T_from_cfg(cfg)
+    if tray.get("support") == "tray_z" and T is not None and tray.get("center_m") is not None:
+        # 자동 검출한 집는 영역: 휘어 보이는 바닥에 2차식 받침면 (광택이면 tray_z 수평면)
+        raised, f_px, z_ref, height = raised_mask_floor_fit(snap, roi, p, T, float(tray["center_m"][2]))
+    else:
+        raised, f_px, z_ref, height = raised_mask(snap, roi, p)
     top_pct = float(cfg.get("perception", {}).get("top_percentile", 95))
 
     if model is None and ycfg.get("weights"):
@@ -127,16 +133,67 @@ def work_roi(snap: SceneSnapshot, cfg: dict) -> np.ndarray:
     return roi
 
 
-def raised_mask(snap: SceneSnapshot, roi: np.ndarray, p: dict) -> tuple[np.ndarray, float, float, np.ndarray]:
-    """받침면보다 솟은 픽셀 (ROI 안). → (마스크, 초점거리 px, 받침면까지 대표 깊이 m, 높이 지도 m)."""
+def support_plane_from_base_z(T_base_camera: np.ndarray, z_m: float) -> tuple[np.ndarray, float]:
+    """base 높이 z 의 수평면을 카메라 좌표 평면 n·p + d = 0 (n 은 카메라 쪽, d > 0) 으로."""
+    T = np.asarray(T_base_camera, float)
+    R, t = T[:3, :3], T[:3, 3]
+    n = R.T @ np.array([0.0, 0.0, 1.0])
+    p0 = R.T @ (np.array([t[0], t[1], z_m]) - t)
+    return n, float(-n @ p0)
+
+
+def raised_mask_floor_fit(snap: SceneSnapshot, roi: np.ndarray, p: dict, T_base_camera: np.ndarray,
+                          tray_z_m: float) -> tuple[np.ndarray, float, float, np.ndarray]:
+    """자동 검출한 집는 영역(workcell.tray.support = tray_z)용 — 받침면을 평면 대신 ROI 바닥의 픽셀 2차식으로.
+
+    10/9 실기: 깊이가 영상 가장자리로 갈수록 짧아져 트레이 바닥이 평면이 아니라 휘어 보였다. 평면을 맞추면
+    한쪽이 1.2 cm 넘게 솟아 바닥 전체가 사과로 잡혔다. 바닥 깊이가 거의 없으면(광택) tray_z 수평면을 쓴다.
+    """
+    from aple.hal.calibration import camera_to_base
+    from aple.perception.box_occupancy import floor_fit_eval
+    from aple.perception.workcell_detect import _fit_floor_px, auto_params
+    fx, fy, _, _ = snap.intrinsics
+    f = (fx + fy) / 2
+    valid = snap.depth_m > 0
+    pts = depth_points(snap.depth_m, snap.intrinsics)
+    z = np.full(snap.depth_m.shape, np.nan)
+    z[valid] = camera_to_base(pts[valid], T_base_camera)[:, 2]
+    zz = np.where(roi, z, np.nan)
+    coef = None
+    if np.isfinite(zz).sum() >= float(p["plane"].get("min_valid_fraction", 0.3)) * max(int(roi.sum()), 1):
+        coef = _fit_floor_px(roi, np.dstack([z, z, z]), auto_params({}))
+    if coef is None:
+        return raised_mask(snap, roi, p, support_plane_from_base_z(T_base_camera, tray_z_m))
+    v, u = np.indices(z.shape)
+    h = np.where(valid, z - floor_fit_eval(coef, u, v), 0.0)
+    raised = ((h > p["min_height_m"]) & roi).astype(np.uint8)
+    if p["close_px"] > 1:
+        raised = cv2.morphologyEx(raised, cv2.MORPH_CLOSE, np.ones((p["close_px"],) * 2, np.uint8))
+    if p["open_px"] > 1:
+        raised = cv2.morphologyEx(raised, cv2.MORPH_OPEN, np.ones((p["open_px"],) * 2, np.uint8))
+    floor = roi & valid & (h <= p["min_height_m"])
+    z_ref = float(np.median(snap.depth_m[floor])) if floor.any() else float(np.median(snap.depth_m[valid]))
+    return raised.astype(bool) & roi, f, z_ref, h
+
+
+def raised_mask(snap: SceneSnapshot, roi: np.ndarray, p: dict,
+                plane: tuple[np.ndarray, float] | None = None) -> tuple[np.ndarray, float, float, np.ndarray]:
+    """받침면보다 솟은 픽셀 (ROI 안). → (마스크, 초점거리 px, 받침면까지 대표 깊이 m, 높이 지도 m).
+
+    plane 을 주면, ROI 안 유효 깊이가 plane.min_valid_fraction(기본 0.3) 미만일 때 그 받침면을 쓴다 —
+    광택 트레이처럼 받침면에 깊이가 없어 평면을 맞출 수 없을 때 (10/9). 깊이가 충분하면 늘 하던 대로 맞춘다.
+    """
     fx, fy, _, _ = snap.intrinsics
     f = (fx + fy) / 2
     pts = depth_points(snap.depth_m, snap.intrinsics)
     valid = snap.depth_m > 0
-    step = int(p["plane"]["step_px"])
-    sub = (valid & roi)[::step, ::step]
-    n, d = fit_plane_ransac(pts[::step, ::step][sub], iters=int(p["plane"]["iters"]),
-                            tol_m=float(p["plane"]["tol_m"]), seed=snap.scene_id)
+    if plane is not None and (valid & roi).sum() < float(p["plane"].get("min_valid_fraction", 0.3)) * max(int(roi.sum()), 1):
+        n, d = plane                                  # 받침면에 깊이가 거의 없다 — 주어진 평면
+    else:
+        step = int(p["plane"]["step_px"])
+        sub = (valid & roi)[::step, ::step]
+        n, d = fit_plane_ransac(pts[::step, ::step][sub], iters=int(p["plane"]["iters"]),
+                                tol_m=float(p["plane"]["tol_m"]), seed=snap.scene_id)
     h = height_above_plane(pts, valid, n, d)
     raised = ((h > p["min_height_m"]) & roi).astype(np.uint8)
     # 순서가 중요하다: 광택으로 생긴 깊이 구멍을 먼저 메우고, 그다음 잡음 점을 지운다.

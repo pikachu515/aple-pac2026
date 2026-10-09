@@ -14,6 +14,7 @@ import aple.config as _config
 #: 현장에서 채우는 값 — 시험에서는 비어 있는 것으로 본다
 FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_json",
               "workcell.poses.home_joint_rad", "workcell.poses.scan_joint_rad",
+              "workcell.auto_detect.enabled",  # 자동 검출은 그 시험(test_workcell_detect)에서만 켠다
               # 역할 B 실기 실행 값 (10/9 제안 PR) — 시험은 실측 전 상태로 본다
               "safety.joint_limits_rad", "safety.workspace_aabb_m",
               *(f"safety.segment_validation.{k}" for k in (
@@ -58,6 +59,7 @@ PRISTINE_LINES = {
         "  tcp_offset_m:": "  tcp_offset_m: null            # 핑거 어댑터 반영",
         "    home_joint_rad:": "    home_joint_rad: null        # 6 rad. 시작·종료·복구 자세",
         "    scan_joint_rad:": "    scan_joint_rad: null        # 6 rad. 탑뷰 촬영 자세 (팔·그림자가 트레이·상자를 가리지 않게)",
+        "  auto_detect:": "  auto_detect: {enabled: false}",
     },
     "execution.yaml": {
         '  iface:': '  iface: "PLACEHOLDER_follower"  # PLACEHOLDER: 시뮬/실행 전 Piper Web 등록 follower 이름으로 교체',

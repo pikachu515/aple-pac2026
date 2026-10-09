@@ -79,6 +79,8 @@ def cfg():
     config["safety"]["gripper_effort_max"] = 1000
     config["size_bins"]["force"]["mu"] = 0.5
     config["size_bins"]["force"]["f_bruise_n"] = 30.0
+    for b in config["size_bins"]["bins"]:
+        b["grasp_height_offset_mm"] = 0      # 파지 높이 = 적도 기준 테스트 — 현장 설정(10/10 +10 mm)과 무관하게 고정
     # 일반 놓기 규칙(칸 바닥 위 release_gap, 낙하 ≤ 3 cm)을 검사한다 — 현장 설정(10/10 release_above_wall,
     # max_drop_m 0.10)과 무관하게 고정. 벽 위에서 놓기는 아래 test_release_above_wall_* 가 따로 본다
     config["workcell"]["placement"].update(max_drop_m=0.03, release_above_wall=False)

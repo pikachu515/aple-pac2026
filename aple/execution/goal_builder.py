@@ -52,6 +52,9 @@ def build_targets(
     profile: GraspProfile,
     candidate: GraspPoseCandidate,
     placement: PlacementPlan,
+    *,
+    place_turn_rad: float = 0.0,
+    place_tilt_rad: float = 0.0,
 ) -> MotionTargets:
     """Derive base_link TCP targets; the spherical apple uses an identity object frame."""
     if not placement.feasible:
@@ -61,6 +64,8 @@ def build_targets(
     place_targets = build_place_targets(
         pick_targets.apple_in_tcp,
         placement,
+        turn_rad=place_turn_rad,
+        outward_tilt_rad=place_tilt_rad,
     )
     return MotionTargets(
         pick_pose=pick_targets.pick_pose,
@@ -126,8 +131,17 @@ def build_pick_targets(
 def build_place_targets(
     apple_in_tcp: Pose3D,
     placement: PlacementPlan,
+    *,
+    turn_rad: float = 0.0,
+    outward_tilt_rad: float = 0.0,
 ) -> PlaceTargets:
-    """Build placement TCP targets from the transform measured after picking."""
+    """Build placement TCP targets from the transform measured after picking.
+
+    The spherical apple may be released in any orientation, so the tool can be
+    turned about the vertical (``turn_rad``) and tilted with its tip away from
+    the base (``outward_tilt_rad``) about the apple centre. Both default to the
+    grasp orientation unchanged.
+    """
     if not placement.feasible:
         raise ValueError("cannot build place targets for an infeasible placement")
     _validate_pose(apple_in_tcp, "apple_in_tcp")
@@ -138,9 +152,14 @@ def build_place_targets(
     if placement.hover_z_m < placement.release_z_m:
         raise ValueError("placement hover_z_m must not be below release_z_m")
 
+    if not math.isfinite(turn_rad) or not math.isfinite(outward_tilt_rad):
+        raise ValueError("place turn and tilt must be finite")
+    x, y = placement.place_center_m[0], placement.place_center_m[1]
+    bearing = math.atan2(y, x)
+    tilt_axis = (-math.sin(bearing), math.cos(bearing), 0.0)
     place_apple_pose = Pose3D(
         placement.place_center_m,
-        (0.0, 0.0, 0.0, 1.0),
+        _multiply(_axis_angle(tilt_axis, -outward_tilt_rad), _axis_angle((0.0, 0.0, 1.0), turn_rad)),
     )
     place_pose = compose(place_apple_pose, inverse(apple_in_tcp))
     hover_pose = Pose3D(
@@ -181,6 +200,11 @@ def inverse(pose: Pose3D) -> Pose3D:
         tuple(-value for value in pose.position_m),
     )
     return Pose3D(inverse_position, inverse_orientation)
+
+
+def _axis_angle(axis: tuple[float, float, float], angle: float) -> tuple[float, float, float, float]:
+    half = angle / 2.0
+    return (axis[0] * math.sin(half), axis[1] * math.sin(half), axis[2] * math.sin(half), math.cos(half))
 
 
 def placement_pose(placement: PlacementPlan) -> Pose3D:

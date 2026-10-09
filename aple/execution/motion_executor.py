@@ -250,7 +250,8 @@ class MotionExecutor:
             raise ValueError("plan.planned_drop_m exceeds workcell.placement.max_drop_m")
 
         effort = self._checked_effort(profile)
-        targets = build_targets(apple, profile, candidate, plan)
+        turn, tilt = self._place_rotation(apple, plan)
+        targets = build_targets(apple, profile, candidate, plan, place_turn_rad=turn, place_tilt_rad=tilt)
         if backend == "act":
             task_text = execution_cfg["act"]["task_text"]
             if not isinstance(task_text, str) or not task_text.strip():
@@ -453,7 +454,8 @@ class MotionExecutor:
             raise ValueError("workcell.placement.max_drop_m must be finite and non-negative")
         if plan.planned_drop_m > max_drop_m:
             raise ValueError("plan.planned_drop_m exceeds workcell.placement.max_drop_m")
-        targets = build_place_targets(apple_in_tcp, plan)
+        turn, tilt = self._place_rotation(apple, plan)
+        targets = build_place_targets(apple_in_tcp, plan, turn_rad=turn, outward_tilt_rad=tilt)
         backend, task_text, timeout_s = self._backend_options(backend)
         effort = self._checked_effort(profile)
         transit_speed = self._speed_scale("speed_scale_max")
@@ -570,6 +572,26 @@ class MotionExecutor:
         )
         return ExecResult(success, FailureCode.NONE if success else FailureCode.ABORTED,
                           Phase.INSPECT)
+
+    def _place_rotation(self, apple: AppleState, plan: PlacementPlan) -> tuple[float, float]:
+        """Release posture from ``execution.transfer`` (sphere: any orientation is valid).
+
+        ``face_place_bearing`` turns the tool from the apple's bearing to the
+        cell's bearing; cells beyond ``far_place_radius_m`` tilt the tool tip
+        outward by ``far_place_tilt_rad`` to stay within the wrist range.
+        """
+        transfer = self.cfg["execution"].get("transfer") or {}
+        if transfer.get("height_m") is None:
+            return 0.0, 0.0
+        turn = 0.0
+        if transfer.get("face_place_bearing", False):
+            turn = (math.atan2(plan.place_center_m[1], plan.place_center_m[0])
+                    - math.atan2(apple.center_m[1], apple.center_m[0]))
+        tilt = 0.0
+        radius = transfer.get("far_place_radius_m")
+        if radius is not None and math.hypot(*plan.place_center_m[:2]) > float(radius):
+            tilt = float(transfer.get("far_place_tilt_rad", 0.0))
+        return turn, tilt
 
     def _checked_effort(self, profile: GraspProfile) -> int:
         effort = effort_for(profile)

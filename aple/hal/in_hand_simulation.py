@@ -23,48 +23,13 @@ from aple.hal.simulation_timing import timed_stage, stage_timer
 
 
 def scene_config(cfg, path, *, seed=None):
-    settings = yaml.safe_load(Path(path).read_text())['in_hand_scene']
-    if 'require_grasp_clearance' in settings and not isinstance(settings['require_grasp_clearance'], bool):
-        raise ValueError('require_grasp_clearance must be boolean')
-    if settings.get('box_grids'):
-        cfg = copy.deepcopy(cfg)
-        for name, grid in settings['box_grids'].items():
-            if name not in cfg['workcell']['boxes'] or not isinstance(grid, list) or len(grid) != 2 or any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in grid):
-                raise ValueError('box_grids requires known boxes and two positive integer dimensions')
-            cfg['workcell']['boxes'][name]['grid'] = list(grid)
+    cfg, settings = scene_settings(cfg, path)
     seed = secrets.randbits(32) if seed is None else seed
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError('seed must be a nonnegative integer')
     bounds = np.asarray(settings['map_xy_m'], float)
     center = np.asarray(settings['inspection_center_m'], float)
-    if bounds.shape != (2, 2) or not np.isfinite(bounds).all() or (np.diff(bounds) <= 0).any():
-        raise ValueError('map_xy_m must be increasing finite bounds')
-    if center.shape != (3,) or not np.isfinite(center).all() or not np.allclose(center[:2], bounds.mean(axis=1)):
-        raise ValueError('inspection XY must equal the map midpoint')
-    for key in ('object_min_distance_m', 'clearance_m', 'inspection_clear_radius_m', 'preopen_m',
-                'empty_joint_velocity_rad_s', 'loaded_joint_velocity_rad_s',
-                'rotation_joint_velocity_rad_s', 'max_slip_m', 'transfer_height_m', 'settle_time_s',
-                'transfer_arc_radius_m', 'transfer_arc_step_rad', 'box_cell_pitch_m', 'grip_open_delta_m', 'camera_height_m', 'video_fps',
-                'far_place_radius_m', 'far_place_tilt_rad'):
-        if isinstance(settings[key], bool) or not math.isfinite(settings[key]) or settings[key] <= 0:
-            raise ValueError(f'invalid {key}')
-    attempts = settings['max_layout_attempts']
-    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
-        raise ValueError('max_layout_attempts must be a positive integer')
-    radii = np.asarray(settings['reach_radius_m'], float)
-    if radii.shape != (2,) or not np.isfinite(radii).all() or not 0 < radii[0] < radii[1]:
-        raise ValueError('reach_radius_m must be increasing positive radii')
-    angles = np.asarray(settings['rotation_angles_rad'],float)
-    if angles.ndim != 1 or not len(angles) or not np.isfinite(angles).all() or not math.isfinite(settings['tilt_rad']):
-        raise ValueError('inspection angles must be finite')
-    if not settings['empty_joint_velocity_rad_s'] > settings['loaded_joint_velocity_rad_s'] >= settings['rotation_joint_velocity_rad_s']:
-        raise ValueError('speeds must satisfy empty > loaded >= rotation')
     specs = settings['apple_specs']
-    for spec in specs:
-        if not 0 < spec['diameter_m'] < settings['preopen_m'] or not 0 < spec['mass_kg'] or not 0 <= spec['red_fraction'] <= 1:
-            raise ValueError('invalid apple size/mass/color')
-    if not cfg['piper_web']['gripper_width_range_m'][0] <= settings['preopen_m'] <= cfg['piper_web']['gripper_width_range_m'][1]:
-        raise ValueError('preopen exceeds assumed finger stroke')
     rng = np.random.default_rng(seed)
     boxes = copy.deepcopy(list(cfg['workcell']['boxes'].values()))
     for box in boxes:
@@ -112,11 +77,63 @@ def scene_config(cfg, path, *, seed=None):
             break
     else:
         raise ValueError(f'Cannot place separated objects (seed={seed})')
+    return apply_layout(cfg, settings, specs, points[:len(specs)], points[len(specs):],
+                        seed=seed, layout_attempts=attempt+1)
+
+
+def scene_settings(cfg, path):
+    """Validated scene settings; box grid overrides are applied to a config copy."""
+    settings = yaml.safe_load(Path(path).read_text())['in_hand_scene']
+    if 'require_grasp_clearance' in settings and not isinstance(settings['require_grasp_clearance'], bool):
+        raise ValueError('require_grasp_clearance must be boolean')
+    if settings.get('box_grids'):
+        cfg = copy.deepcopy(cfg)
+        for name, grid in settings['box_grids'].items():
+            if name not in cfg['workcell']['boxes'] or not isinstance(grid, list) or len(grid) != 2 or any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in grid):
+                raise ValueError('box_grids requires known boxes and two positive integer dimensions')
+            cfg['workcell']['boxes'][name]['grid'] = list(grid)
+    bounds = np.asarray(settings['map_xy_m'], float)
+    center = np.asarray(settings['inspection_center_m'], float)
+    if bounds.shape != (2, 2) or not np.isfinite(bounds).all() or (np.diff(bounds) <= 0).any():
+        raise ValueError('map_xy_m must be increasing finite bounds')
+    if center.shape != (3,) or not np.isfinite(center).all() or not np.allclose(center[:2], bounds.mean(axis=1)):
+        raise ValueError('inspection XY must equal the map midpoint')
+    for key in ('object_min_distance_m', 'clearance_m', 'inspection_clear_radius_m', 'preopen_m',
+                'empty_joint_velocity_rad_s', 'loaded_joint_velocity_rad_s',
+                'rotation_joint_velocity_rad_s', 'max_slip_m', 'transfer_height_m', 'settle_time_s',
+                'transfer_arc_radius_m', 'transfer_arc_step_rad', 'box_cell_pitch_m', 'grip_open_delta_m', 'camera_height_m', 'video_fps',
+                'far_place_radius_m', 'far_place_tilt_rad'):
+        if isinstance(settings[key], bool) or not math.isfinite(settings[key]) or settings[key] <= 0:
+            raise ValueError(f'invalid {key}')
+    attempts = settings['max_layout_attempts']
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
+        raise ValueError('max_layout_attempts must be a positive integer')
+    radii = np.asarray(settings['reach_radius_m'], float)
+    if radii.shape != (2,) or not np.isfinite(radii).all() or not 0 < radii[0] < radii[1]:
+        raise ValueError('reach_radius_m must be increasing positive radii')
+    angles = np.asarray(settings['rotation_angles_rad'],float)
+    if angles.ndim != 1 or not len(angles) or not np.isfinite(angles).all() or not math.isfinite(settings['tilt_rad']):
+        raise ValueError('inspection angles must be finite')
+    if not settings['empty_joint_velocity_rad_s'] > settings['loaded_joint_velocity_rad_s'] >= settings['rotation_joint_velocity_rad_s']:
+        raise ValueError('speeds must satisfy empty > loaded >= rotation')
+    specs = settings['apple_specs']
+    for spec in specs:
+        if not 0 < spec['diameter_m'] < settings['preopen_m'] or not 0 < spec['mass_kg'] or not 0 <= spec['red_fraction'] <= 1:
+            raise ValueError('invalid apple size/mass/color')
+    if not cfg['piper_web']['gripper_width_range_m'][0] <= settings['preopen_m'] <= cfg['piper_web']['gripper_width_range_m'][1]:
+        raise ValueError('preopen exceeds assumed finger stroke')
+    return cfg, settings
+
+
+def apply_layout(cfg, settings, specs, apple_xy, box_xy, *, seed, layout_attempts):
+    """Write sampled apple/box XY and the shared virtual-cell settings into a copy."""
+    bounds = np.asarray(settings['map_xy_m'], float)
+    center = np.asarray(settings['inspection_center_m'], float)
     out = copy.deepcopy(cfg)
-    out['simulation']['in_hand_scene'] = dict(settings, seed=seed, layout_attempts=attempt+1)
+    out['simulation']['in_hand_scene'] = dict(settings, seed=seed, layout_attempts=layout_attempts)
     out['simulation']['apples'] = [dict(center_m=[*map(float, p), s['diameter_m']/2],
-        radius_m=s['diameter_m']/2, mass_kg=s['mass_kg'], red_fraction=s['red_fraction']) for p, s in zip(points, specs)]
-    for box, p in zip(out['workcell']['boxes'].values(), points[len(specs):]):
+        radius_m=s['diameter_m']/2, mass_kg=s['mass_kg'], red_fraction=s['red_fraction']) for p, s in zip(apple_xy, specs)]
+    for box, p in zip(out['workcell']['boxes'].values(), box_xy):
         box['cell_pitch_m'] = settings['box_cell_pitch_m']
         half = np.array(box['grid'][::-1])*box['cell_pitch_m']/2
         box['origin_m'] = [*map(float, p-half), 0.]
@@ -417,9 +434,11 @@ class CentralInspectionAdapter(PiperTrajectoryMotionAdapter):
     @timed_stage("box_transfer")
     def execute_place_phase_a(self, apple, profile, placement, targets, **kwargs):
         transport = self._transport
-        current = transport.tool_pose()
-        aligned = Pose3D(current.position_m, _axis_angle((0,1,0), transport.settings['tilt_rad']))
-        self._move_poses((aligned,), speed_scale=kwargs['speed_scale'], deadline=self._deadline(kwargs['timeout_s']))
+        # Undo the inspection pose; a pick-place-only run is already in transfer posture.
+        if transport.settings.get('align_before_box_transfer', True):
+            current = transport.tool_pose()
+            aligned = Pose3D(current.position_m, _axis_angle((0,1,0), transport.settings['tilt_rad']))
+            self._move_poses((aligned,), speed_scale=kwargs['speed_scale'], deadline=self._deadline(kwargs['timeout_s']))
         self._high_transfer(targets.hover_pose.position_m[:2], speed_scale=kwargs['speed_scale'], timeout_s=kwargs['timeout_s'])
         tilt = math.radians(transport.a['tool_down_rpy_deg'][1])
         if np.linalg.norm(placement.place_center_m[:2]) > transport.settings['far_place_radius_m']:

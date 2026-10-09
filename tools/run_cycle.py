@@ -113,6 +113,26 @@ def missing_for_execution(cfg: dict) -> list[str]:
     return missing_for_live_execution(cfg)
 
 
+def limit_items(runner, n: int):
+    """runner.plan 이 집을 사과(PICK_*)를 앞에서 n 개만 남기게 감싼다 — 나머지(SKIP·DEFER 포함)는 이번 장면에서 뺀다."""
+    from dataclasses import replace
+
+    from aple.schema import TaskAction
+    if n <= 0:
+        raise SystemExit("--max-items 는 1 이상")
+    plan = runner.plan
+
+    def limited(snap):
+        result = plan(snap)
+        if result.work is None:
+            return result
+        picks = [it for it in result.work.items
+                 if it.task.action in (TaskAction.PICK_PLACE, TaskAction.PICK_INSPECT_PLACE)][:n]
+        return replace(result, work=replace(result.work, items=tuple(picks)))
+    runner.plan = limited
+    return runner
+
+
 def print_records(records: list[CycleRecord]) -> None:
     print(f"  {'scene':>5} {'사과':>4} {'직경mm':>6} {'착색비율 [구간]':>20} {'등급':>6} {'사유':>9} {'작업':>18} {'목표':>10} {'결과':>4}")
     for r in records:
@@ -136,6 +156,7 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
     ap.add_argument("--scene-depth", help="--scene 사진의 깊이 보정 'gain,offset_per_m' (기본: 설정 live_camera.depth_correction). "
                     "시뮬 설정은 합성 깊이용으로 보정을 끄므로 실물 사진에는 따로 적용한다. '1,0' = 보정 안 함")
     ap.add_argument("--execute", action="store_true", help="실제 로봇 실행 (--live 에서만)")
+    ap.add_argument("--max-items", type=int, help="장면마다 집을 사과 수 상한 (첫 실기는 1). 나머지는 다음 사이클에서")
     ap.add_argument("--cycles", type=int, help="사이클 수 (기본: replay 는 파일 수, live 는 1)")
     ap.add_argument("--card", type=Path, help="card.json (기본: color.card_json 또는 replay 폴더의 card.json)")
     ap.add_argument("--save", type=Path, help="찍은 원본 장면을 이 폴더에 저장 (나중에 --replay 로 재검증)")
@@ -220,6 +241,8 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         pipeline = PickPlacePipeline(cfg, adapter)
         extra = {"estimate_boxes": world.virtual_boxes} if hasattr(world, "virtual_boxes") else {}
         runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for, **extra)))(cfg, pipeline)
+    if args.max_items is not None:
+        runner = limit_items(runner, args.max_items)
 
     manager = CycleManager(cfg, capture=capture, plan_scene=runner.plan, execute_scene=runner.execute,
                            make_records=runner.records, dry_run_capture=capture, dry_run=not (args.execute or args.simulate),

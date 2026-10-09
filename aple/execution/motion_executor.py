@@ -203,6 +203,7 @@ class MotionExecutor:
         self.hal = hal
         self.cfg = cfg
         self.stage_timings = {}
+        self._grasp_xyzw = None          # 마지막으로 집은 TCP 자세 — 놓는 자세를 같은 쪽으로 맞춘다
 
     def _timed_call(self, stage, call, *args, **kwargs):
         started = time.monotonic()
@@ -250,6 +251,7 @@ class MotionExecutor:
             raise ValueError("plan.planned_drop_m exceeds workcell.placement.max_drop_m")
 
         effort = self._checked_effort(profile)
+        self._grasp_xyzw = candidate.grasp_pose.orientation_xyzw
         targets = build_targets(apple, profile, candidate, plan, self._place_orientation(plan))
         if backend == "act":
             task_text = execution_cfg["act"]["task_text"]
@@ -323,6 +325,7 @@ class MotionExecutor:
         self._validate_pick_match(apple, profile, candidate)
         if not profile.feasible:
             return PickExecutionResult(False, FailureCode.ABORTED, Phase.IDLE)
+        self._grasp_xyzw = candidate.grasp_pose.orientation_xyzw
         targets = build_pick_targets(apple, profile, candidate)
         backend, task_text, timeout_s = self._backend_options(backend)
         result = self._timed_call('t_pick_s', self.hal.execute_pick,
@@ -678,11 +681,14 @@ class MotionExecutor:
             raise ValueError("apple.diameter_m must be finite and positive")
 
     def _place_orientation(self, plan):
-        """먼 곳 기울이기(grasp_planner.tilt_start_m)가 켜져 있으면 놓는 위치에 맞춘 TCP 자세, 아니면 None(집을 때 자세 유지)."""
+        """먼 곳 기울이기(grasp_planner.tilt_start_m)가 켜져 있으면 놓는 위치에 맞춘 TCP 자세, 아니면 None(집을 때 자세 유지).
+
+        180° 대칭 두 자세 중 집을 때 닫힘 방향과 가까운 쪽 — 사과를 든 채 손목이 반 바퀴 돌지 않게."""
         if (self.cfg.get("grasp_planner") or {}).get("tilt_start_m") is None:
             return None
-        from aple.perception.grasp_planner import tool_orientation_at
-        return tool_orientation_at(plan.place_center_m[:2], self.cfg)
+        from aple.perception.grasp_planner import nearest_tool_flip, tool_orientation_at
+        q = tool_orientation_at(plan.place_center_m[:2], self.cfg)
+        return q if self._grasp_xyzw is None else nearest_tool_flip(q, self._grasp_xyzw)
 
     def _backend_options(self, backend: str | None) -> tuple[str, str, float]:
         execution_cfg = self.cfg["execution"]

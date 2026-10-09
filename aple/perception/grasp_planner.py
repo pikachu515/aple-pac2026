@@ -203,3 +203,25 @@ def quat_xyzw(R: np.ndarray) -> tuple[float, float, float, float]:
     if q[3] < 0:
         q = -q
     return tuple(float(v) for v in q)
+
+
+def quat_matrix(q_xyzw) -> np.ndarray:
+    """단위 쿼터니언 (x, y, z, w) → 회전 행렬."""
+    x, y, z, w = (float(v) for v in q_xyzw)
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def flip_about_tool_axis(q_xyzw) -> tuple[float, float, float, float]:
+    """그리퍼 축(TCP z) 둘레로 180° 돌린 자세. 평행 그리퍼는 두 핑거 자리만 바뀌는 같은 파지다.
+
+    10/9 실기: Piper 6축(±115°) 한계 때문에 한쪽은 IK 가 못 풀고 다른 쪽은 풀린다 (손목도 덜 돈다)."""
+    return quat_xyzw(quat_matrix(q_xyzw) @ np.diag([-1.0, -1.0, 1.0]))
+
+
+def nearest_tool_flip(q_xyzw, ref_xyzw) -> tuple[float, float, float, float]:
+    """q 와 180° 뒤집은 q 중 닫힘 방향(TCP x)이 ref 와 가까운 쪽 — 사과를 든 채 손목이 반 바퀴 돌지 않게."""
+    if float(quat_matrix(q_xyzw)[:, 0] @ quat_matrix(ref_xyzw)[:, 0]) >= 0:
+        return tuple(float(v) for v in q_xyzw)
+    return flip_about_tool_axis(q_xyzw)

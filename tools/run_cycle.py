@@ -182,8 +182,6 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         ap.error("--cycles must be positive")
 
     cfg = load_config()
-    if args.card is not None:
-        cfg['color']['card_json'] = str(args.card)
     world = adapter = None
     checks = []
     scene_depth = DepthCorrection(*map(float, args.scene_depth.split(","))) if args.scene_depth \
@@ -195,6 +193,8 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         ap.error("--trace requires --simulate")
     if args.scene and not args.simulate:
         ap.error("--scene requires --simulate")
+    if args.card is not None:                                # 시뮬 설정(카드 없음)보다 명시한 --card 우선
+        cfg['color']['card_json'] = str(args.card)
     if args.scene and (args.cycles or 1) != 1:
         ap.error("--scene 은 한 장면(1 사이클)만 — 사과를 집어도 사진은 바뀌지 않는다")
     for line in apply_overrides(cfg, args.set):

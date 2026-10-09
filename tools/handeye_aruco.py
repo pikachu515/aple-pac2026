@@ -69,21 +69,27 @@ class Target:
     """
 
     def __init__(self, kind: str, *, cols: int = 2, rows: int = 2, marker_m: float = 0.035, sep_m: float = 0.008,
-                 first_id: int = 10, marker_id: int = 0) -> None:
-        if kind not in ("board", "marker"):
-            raise ValueError("kind 는 board 또는 marker")
+                 first_id: int = 10, marker_id: int = 0, square_m: float = 0.028) -> None:
+        if kind not in ("board", "marker", "charuco"):
+            raise ValueError("kind 는 board, marker, charuco")
         self.kind, self.cols, self.rows = kind, int(cols), int(rows)
         self.marker_m, self.sep_m = float(marker_m), float(sep_m)
         self.first_id, self.marker_id = int(first_id), int(marker_id)
-        self.min_markers = 2 if kind == "board" else 1
+        self.square_m = float(square_m)
+        self.min_markers = 1 if kind == "marker" else 2
 
     @property
     def ids(self) -> list[int]:
         if self.kind == "marker":
             return [self.marker_id]
+        if self.kind == "charuco":
+            return [int(i) for i in self.board().getIds().ravel()]
         return list(range(self.first_id, self.first_id + self.cols * self.rows))
 
     def board(self):
+        if self.kind == "charuco":                     # 다른 사람이 만든 ChArUco 를 잘라 써도 된다 — 찾은 마커만 쓴다
+            return cv2.aruco.CharucoBoard((self.cols, self.rows), self.square_m, self.marker_m,
+                                          cv2.aruco.getPredefinedDictionary(DICT))
         return cv2.aruco.GridBoard((self.cols, self.rows), self.marker_m, self.sep_m,
                                    cv2.aruco.getPredefinedDictionary(DICT), np.array(self.ids))
 
@@ -92,6 +98,8 @@ class Target:
         """표적 전체 가로·세로 (m)."""
         if self.kind == "marker":
             return self.marker_m, self.marker_m
+        if self.kind == "charuco":
+            return self.cols * self.square_m, self.rows * self.square_m
         return (self.cols * self.marker_m + (self.cols - 1) * self.sep_m,
                 self.rows * self.marker_m + (self.rows - 1) * self.sep_m)
 
@@ -99,6 +107,8 @@ class Target:
         d = {"kind": self.kind, "dict": "DICT_4X4_50", "marker_m": self.marker_m}
         if self.kind == "board":
             d.update(cols=self.cols, rows=self.rows, sep_m=self.sep_m, first_id=self.first_id)
+        elif self.kind == "charuco":
+            d.update(cols=self.cols, rows=self.rows, square_m=self.square_m)
         else:
             d.update(marker_id=self.marker_id)
         return d
@@ -108,10 +118,19 @@ class Target:
         if d["kind"] == "board":
             return Target("board", cols=d["cols"], rows=d["rows"], marker_m=d["marker_m"], sep_m=d["sep_m"],
                           first_id=d["first_id"])
+        if d["kind"] == "charuco":
+            return Target("charuco", cols=d["cols"], rows=d["rows"], marker_m=d["marker_m"], square_m=d["square_m"])
         return Target("marker", marker_m=d["marker_m"], marker_id=d["marker_id"])
 
     @staticmethod
     def from_args(args) -> "Target":
+        if getattr(args, "charuco", None):
+            try:
+                cols, rows = (int(v) for v in args.charuco.lower().split("x"))
+            except ValueError:
+                raise SystemExit(f"--charuco 는 '칸 열x행' (예: 7x5): {args.charuco}") from None
+            return Target("charuco", cols=cols, rows=rows, marker_m=args.charuco_marker_mm / 1000,
+                          square_m=args.square_mm / 1000)
         if getattr(args, "marker_id", None) is not None:
             return Target("marker", marker_m=args.marker_mm / 1000, marker_id=args.marker_id)
         board = args.board or "2x2"
@@ -123,6 +142,9 @@ class Target:
                       sep_m=args.board_sep_mm / 1000, first_id=args.board_first_id)
 
     def describe(self) -> str:
+        if self.kind == "charuco":
+            return (f"ChArUco {self.cols}×{self.rows}칸 id {self.ids[0]}~{self.ids[-1]}, 칸 {self.square_m * 1000:g} mm, "
+                    f"마커 {self.marker_m * 1000:g} mm")
         if self.kind == "board":
             w, h = self.size_m
             return (f"보드 {self.cols}×{self.rows} id {self.ids[0]}~{self.ids[-1]}, 마커 {self.marker_m * 1000:g} mm, "
@@ -145,13 +167,22 @@ def detect_target(bgr: np.ndarray, target: Target) -> tuple[np.ndarray, np.ndarr
     corners, ids, _ = _detector().detectMarkers(gray)
     if ids is None:
         return None
-    keep = [k for k, i in enumerate(ids.ravel()) if int(i) in target.ids]
+    flat = [int(i) for i in ids.ravel()]
+    if any(flat.count(i) > 1 for i in flat if i in target.ids):
+        return None                                    # 같은 표적이 두 장 보인다 — 어느 것인지 모른다
+    keep = [k for k, i in enumerate(flat) if i in target.ids]
     if len(keep) < target.min_markers:
         return None
     corners = [corners[k] for k in keep]
     found = [int(ids.ravel()[k]) for k in keep]
     if target.kind == "marker":
         return marker_object_points(target.marker_m), corners[0].reshape(4, 2).astype(np.float64), found
+    if target.kind == "charuco":                       # CharucoBoard.matchImagePoints 는 체커 모서리용 — 마커 모서리는 직접
+        b = target.board()
+        by_id = {int(i): np.asarray(o, dtype=np.float64).reshape(4, 3) for i, o in zip(b.getIds().ravel(), b.getObjPoints())}
+        obj = np.vstack([by_id[i] for i in found])
+        img = np.vstack([c.reshape(4, 2) for c in corners]).astype(np.float64)
+        return obj, img, found
     obj, img = target.board().matchImagePoints(corners, np.array(found).reshape(-1, 1))
     return obj.reshape(-1, 3).astype(np.float64), img.reshape(-1, 2).astype(np.float64), found
 
@@ -435,6 +466,8 @@ def cmd_capture(args) -> None:
     print(f"표적: {target.describe()}")
     fk, joint_state = flange_reader(args.iface)
     img_dir = args.session.parent / "handeye_imgs" if args.save_images else None
+    if args.auto:
+        return _capture_auto(args, session, target, fk, joint_state, img_dir)
     print(f"자세마다 팔을 멈추고 Enter (u = 취소, q = 끝). 지금 {len(session['poses'])}개")
     while True:
         text = input(f"자세 {len(session['poses']) + 1} > ").strip().lower()
@@ -449,7 +482,7 @@ def cmd_capture(args) -> None:
         snap = grab_snapshot(args)
         pose = record_pose(snap, joint_state(), fk, target, not args.no_depth)
         if pose is None:
-            print(f"  [다시] 표적을 못 찾았다 (마커 {target.min_markers}개 이상 필요) — 카메라에 표적이 보이는지, "
+            print(f"  [다시] 표적을 못 찾았다 (마커 {target.min_markers}개 이상 필요) — 카메라에 표적이 하나만 보이는지(같은 보드 두 장이면 안 된다), "
                   "반사·흐림이 없는지 확인")
             continue
         session["intrinsics"] = [float(v) for v in snap.intrinsics]
@@ -468,6 +501,55 @@ def cmd_capture(args) -> None:
               + ("" if pose["depth_scale"] is None else f", 깊이 축척 {pose['depth_scale']:.3f}")
               + f" | 자세 {len(F)}개, 최대 회전 {rotation_spread_deg(F):.0f}°")
     print(f"완료 — {len(session['poses'])}개. 다음: fit")
+
+
+def is_new_pose(T: np.ndarray, recorded: list[np.ndarray], min_move_m: float, min_rot_deg: float) -> bool:
+    """이미 기록한 자세들과 충분히 다른가 (위치 min_move_m 또는 회전 min_rot_deg 이상)."""
+    return all(np.linalg.norm(T[:3, 3] - R[:3, 3]) >= min_move_m
+               or rotation_angle_deg(T[:3, :3], R[:3, :3]) >= min_rot_deg for R in recorded)
+
+
+def _capture_auto(args, session, target, fk, joint_state, img_dir) -> None:
+    """Enter 없이 — 팔이 still_s 동안 멈추고 이전 자세들과 다르면 기록한다 (텔레오퍼레이션으로 옮기기만 하면 된다)."""
+    print(f"자동 기록: 팔을 {args.still_s:.1f}초 멈추면 기록 (이전 자세와 {args.min_move_mm:.0f} mm 또는 "
+          f"{args.min_rot_deg:.0f}° 이상 달라야 함). {args.max_poses}개 또는 Ctrl+C 로 끝. 지금 {len(session['poses'])}개",
+          flush=True)
+    recorded = [np.asarray(p["T_base_flange"]) for p in session["poses"]]
+    window: list[tuple[float, np.ndarray]] = []
+    last_miss = 0.0
+    try:
+        while len(session["poses"]) < args.max_poses:
+            now = time.time()
+            q = np.asarray(joint_state(), dtype=float)
+            window = [(t, v) for t, v in window if now - t <= args.still_s] + [(now, q)]
+            still = (now - window[0][0] >= args.still_s * 0.9
+                     and np.degrees(np.ptp([v for _, v in window], axis=0)).max() < args.still_deg)
+            T = np.asarray(fk(q), dtype=float)
+            if still and is_new_pose(T, recorded, args.min_move_mm / 1000, args.min_rot_deg):
+                snap = grab_snapshot(args)
+                pose = record_pose(snap, q, fk, target, not args.no_depth)
+                if pose is None:
+                    if now - last_miss > 3:
+                        print("  [못 찾음] 표적이 안 보이거나 같은 보드가 두 장 보인다 — 자세를 바꾸거나 다른 보드를 치운다", flush=True)
+                        last_miss = now
+                else:
+                    session["intrinsics"] = [float(v) for v in snap.intrinsics]
+                    session["poses"].append(pose)
+                    save_session(args.session, session)
+                    recorded.append(T)
+                    if img_dir is not None:
+                        img_dir.mkdir(parents=True, exist_ok=True)
+                        img = snap.color.copy()
+                        for quad in np.asarray(pose["img_pts"]).reshape(-1, 4, 2):
+                            cv2.polylines(img, [quad.astype(np.int32)], True, (0, 0, 255), 2)
+                        cv2.imwrite(str(img_dir / f"pose_{len(session['poses']):02d}.png"), img)
+                    print(f"  [{len(session['poses'])}] 기록 — 마커 {pose['n_markers']}개, "
+                          f"거리 {pose['T_camera_target'][2][3] * 1000:.0f} mm, 재투영 {pose['reproj_px']:.2f} px, "
+                          f"최대 회전 {rotation_spread_deg(recorded):.0f}°", flush=True)
+            time.sleep(0.15)
+    except KeyboardInterrupt:
+        pass
+    print(f"완료 — {len(session['poses'])}개. 다음: fit", flush=True)
 
 
 def cmd_fit(args) -> tuple[np.ndarray, np.ndarray]:
@@ -588,6 +670,9 @@ def main(argv: list[str] | None = None):
         g = p.add_mutually_exclusive_group()
         g.add_argument("--board", help="GridBoard 열x행 (기본 2x2)")    # 기본값을 두면 --marker-id 와 충돌 검사가 빠진다
         g.add_argument("--marker-id", type=int, help="보드 대신 마커 하나 (id)")
+        g.add_argument("--charuco", help="ChArUco 칸 수 열x행 (예: 7x5) — 잘라 쓴 조각도 된다")
+        p.add_argument("--square-mm", type=float, default=28.0, help="--charuco 칸 한 변 (mm)")
+        p.add_argument("--charuco-marker-mm", type=float, default=21.0, help="--charuco 마커 한 변 (mm)")
         p.add_argument("--board-marker-mm", type=float, default=35.0, help="보드 마커 한 변 (mm, 인쇄물을 자로 잰 값)")
         p.add_argument("--board-sep-mm", type=float, default=8.0, help="보드 마커 간격 (mm)")
         p.add_argument("--board-first-id", type=int, default=10, help="보드 첫 마커 id (행 우선으로 이어진다)")
@@ -605,6 +690,12 @@ def main(argv: list[str] | None = None):
     c = sub.add_parser("capture", help="자세마다 스냅샷 + 관절각 기록")
     c.add_argument("--session", type=Path, default=ROOT / "data" / "calib" / "handeye.json")
     c.add_argument("--save-images", action="store_true", help="자세마다 검출 표시 영상을 handeye_imgs/ 에 저장")
+    c.add_argument("--auto", action="store_true", help="Enter 없이 팔이 멈추면 자동 기록")
+    c.add_argument("--still-s", type=float, default=1.0, help="--auto: 이만큼 멈추면 기록 (s)")
+    c.add_argument("--still-deg", type=float, default=0.3, help="--auto: 멈춤 판정 관절 흔들림 상한 (deg)")
+    c.add_argument("--min-move-mm", type=float, default=40.0, help="--auto: 이전 자세와 최소 위치 차")
+    c.add_argument("--min-rot-deg", type=float, default=10.0, help="--auto: 이전 자세와 최소 회전 차")
+    c.add_argument("--max-poses", type=int, default=15, help="--auto: 이만큼 모이면 끝")
     target_args(c)
     device_args(c)
 

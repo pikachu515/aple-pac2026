@@ -262,3 +262,31 @@ def test_board_pdf_is_a4_at_exact_scale(tmp_path):
     assert found is not None and sorted(found[2]) == [10, 11, 12, 13]
     side_px = np.linalg.norm(found[1][1] - found[1][0])           # 마커 한 변 35 mm = 413 px
     assert side_px == pytest.approx(35 / 25.4 * 300, abs=2)
+
+
+def test_auto_capture_new_pose_rule():
+    from tools.handeye_aruco import is_new_pose
+    A = np.eye(4)
+    B = np.eye(4); B[:3, 3] = [0.05, 0, 0]
+    C = np.eye(4); C[:3, :3] = np.array([[1, 0, 0], [0, np.cos(0.3), -np.sin(0.3)], [0, np.sin(0.3), np.cos(0.3)]])
+    assert is_new_pose(A, [], 0.04, 10)
+    assert not is_new_pose(A, [A], 0.04, 10)
+    assert is_new_pose(B, [A], 0.04, 10)                                      # 50 mm 이동
+    assert is_new_pose(C, [A], 0.04, 10)                                      # 17° 회전
+
+
+def test_charuco_board_piece_detection_and_duplicate_guard():
+    """다른 사람이 만든 ChArUco(7×5칸, 칸 28·마커 21 mm)를 잘라 써도 찾은 마커만으로 좌표가 나온다.
+    같은 보드가 두 장 보이면 거부한다 (10/9 실기: 책상에 두 장)."""
+    import cv2
+    from tools.handeye_aruco import Target, detect_target
+    t = Target("charuco", cols=7, rows=5, marker_m=0.021, square_m=0.028)
+    img = t.board().generateImage((7 * 60, 5 * 60), marginSize=40)
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    obj, pix, ids = detect_target(img, t)
+    assert len(ids) == 17 and obj.shape == (68, 3)
+    piece = np.full_like(img, 255); piece[:, :220] = img[:, :220]             # 왼쪽 일부만 잘라 붙인 조각
+    obj2, _, ids2 = detect_target(piece, t)
+    assert 2 <= len(ids2) < 17
+    assert np.allclose(obj2, obj[[i for k in ids2 for i in range(4 * ids.index(k), 4 * ids.index(k) + 4)]])
+    assert detect_target(np.hstack([img, img]), t) is None                   # 두 장이면 None

@@ -103,3 +103,20 @@ def test_goal_is_repeated_while_waiting_so_robotd_deadman_does_not_freeze(piper_
     studio.send_timed_joint_trajectory((TimedJointGoal(target, .1),), limits, speed_scale=1., timeout_s=3.)
     gaps = [b - a for a, b in zip(goals, goals[1:])]
     assert len(goals) >= 4 and max(gaps) < .5                         # 데드맨보다 자주 다시 보냈다
+
+
+def test_gripper_only_close_waits_for_robotd_to_accept_a_new_jog_session(piper_web, monkeypatch):
+    """10/10 실기·재현: 직전 조그를 끝내고 0.5 s 만에 그리퍼만 닫는 세션을 열면 명령이 robotd 에 안 들어가 6 s 동안
+    안 닫혔다. 6 s 뒤에 열면 0.3 s 만에 닫혔다 → 그리퍼만 여닫기 전에 JOG_HANDOVER_S 를 기다린다."""
+    _, studio = piper_web
+    clock = [100.]
+    slept = []
+    monkeypatch.setattr(studio_module, "JOG_HANDOVER_S", 5.5)
+    monkeypatch.setattr(studio_module, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], sleep=lambda d: (slept.append(d), clock.__setitem__(0, clock[0] + d))))
+    studio_module._LAST_JOG_STOP[0] = 99.5                        # 0.5 s 전에 직전 조그가 끝났다
+    studio.wait_jog_handover()
+    assert slept and sum(slept) == pytest.approx(5.0)
+    slept.clear()
+    studio.wait_jog_handover()                                    # 이미 지났으면 안 기다린다
+    assert not slept

@@ -104,6 +104,12 @@ VELOCITY_MIN_WINDOW_S = 0.1
 #: 도착을 기다리는 동안 같은 목표를 이 간격으로 다시 보낸다 — robotd 데드맨(500 ms)보다 충분히 짧게
 GOAL_RESEND_S = 0.2
 
+#: 조그 세션을 끝낸 뒤 이만큼 지나야 새 세션의 명령이 robotd 에 들어간다 (10/10 실기·재현: 0.5 s 만에 다시 열면 그리퍼만
+#: 닫는 세션이 6 s 동안 데드맨으로 묶여 안 닫혔고, 6 s 뒤에 열면 0.3 s 만에 닫혔다. Piper v0.5.7 의 '5 s 안에 쓴 명령
+#: 세그먼트는 넘기지 않는다'와 같은 값). 목표가 계속 바뀌는 팔 궤적은 결국 따라가지만, 목표 하나뿐인 그리퍼 명령은 잃는다
+JOG_HANDOVER_S = 5.5
+_LAST_JOG_STOP = [0.0]   # 마지막 조그 종료 시각 (time.monotonic) — 객체가 여러 개여도 robotd 는 하나다
+
 
 def _arrival_gap(current, target_rad, gripper_position, target) -> str:
     """도착 대기 시간 초과 때 어디서 멈췄는지 — robotd 바닥 필터·관절 범위가 목표를 줄였는지, 덜 따라왔는지 가린다."""
@@ -399,6 +405,13 @@ class PiperStudio:
             velocity_tolerance_rad_s=limits.velocity_tolerance_rad_s,
             gripper_width_watch=gripper_width_watch)
 
+    def wait_jog_handover(self) -> None:
+        """그리퍼만 움직이는 세션 전에: 직전 조그 세션이 끝나고 JOG_HANDOVER_S 가 지날 때까지 기다린다."""
+        remaining = _LAST_JOG_STOP[0] + JOG_HANDOVER_S - time.monotonic()
+        if remaining > 0:
+            _LOG.info("gripper-only jog: waiting %.1f s for robotd to accept a new session", remaining)
+            time.sleep(remaining)
+
     def close_for_grasp(self, diameter_m, effort, *, timeout_s):
         """Accept settled contact before the inward goal; verify fruit after lifting."""
         from aple.execution.timed_motion import positive
@@ -411,6 +424,7 @@ class PiperStudio:
         positive(settings.get('contact_stability_m'), 'contact_stability_m')
         if effort != self._expected_gripper_effort:
             raise PiperWebError('command effort must match execution.gripper.fixed_effort')
+        self.wait_jog_handover()
         goal = self._normalize_joint_target(self.joint_state())
         goal['gripper'] = self._normalize_gripper_width(diameter_m-compression)
         self._move_sequence_to_normalized((goal,), timeout_s, grasp_diameter_m=diameter_m)
@@ -564,6 +578,7 @@ class PiperStudio:
                 if started:
                     try:
                         stop_result = self._request("POST", "/api/robots/jog/stop", {})
+                        _LAST_JOG_STOP[0] = time.monotonic()
                         if not isinstance(stop_result, dict) or stop_result.get("status") != "stopped":
                             raise PiperWebError("Piper Web did not confirm that jog stopped")
                     except Exception as stop_error:
@@ -865,6 +880,9 @@ class PiperStudioMotionTransport:
         self, width_m: float, effort: int, *, timeout_s: float
     ) -> bool:
         self._held_width_m = None
+        wait = getattr(self._studio, 'wait_jog_handover', None)
+        if callable(wait):
+            wait()                                   # 그리퍼만 여닫는 세션 — 조그 인계 대기 (JOG_HANDOVER_S)
         joints = self._studio.joint_state()
         self._studio.send(
             ArmCommand(joints, width_m, effort, "scripted"),

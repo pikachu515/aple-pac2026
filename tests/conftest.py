@@ -109,3 +109,13 @@ def pristine_copy(src_name: str, dest) -> Path:
                 text[i] = pristine
     dest.write_text("\n".join(text), encoding="utf-8")
     return dest
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _no_jog_handover_wait(monkeypatch):
+    """실기용 조그 인계 대기(piper_studio.JOG_HANDOVER_S, 5.5 s)는 시험에서 끈다 — 그 시험(test_timed_tracking)만 켠다."""
+    import aple.hal.piper_studio as studio
+    monkeypatch.setattr(studio, "JOG_HANDOVER_S", 0.0)

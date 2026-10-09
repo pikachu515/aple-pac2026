@@ -3,7 +3,7 @@
 Construction performs only configuration/kinematics work. Robot commands happen
 when the caller explicitly runs the returned scan/execute callbacks.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import math
 import numpy as np
@@ -174,10 +174,32 @@ def build_live_runtime(config, capture, light_for):
         if not pipeline._executor.move_named('scan').success:
             raise RuntimeError('scan pose could not be reached safely')
         return safe_snapshot()
+    observed_scene = {}
     def before_execute(item, apples, boxes):
+        observed_scene.update(apples=tuple(apples), boxes=tuple(boxes))
         guard.clear_payload()
         guard.update_scene(apples, boxes, target_apple_id=item.apple.apple_id)
     runner = SceneRunner.from_config(cfg, pipeline, light_for=light_for,
         capture_for_retry=scan_capture, capture_for_verification=scan_capture,
         before_execute=before_execute)
-    return LiveRuntime(studio, adapter, pipeline, runner, scan_capture)
+    from aple.orchestration.mission_controller import MissionController
+    from aple.schema import Phase
+    def prepare_recovery(item):
+        # APPROACH/DESCEND failures precede close in the scripted adapter.
+        # Later phases can still hold an apple: never open or move to scan here.
+        if item.execution is None or item.execution.phase_reached not in (Phase.APPROACH, Phase.DESCEND):
+            return False
+        if cfg['execution']['default_backend'] != 'scripted':
+            return False
+        joints = studio.joint_state()
+        if len(joints) != 6 or not np.isfinite(joints).all():
+            return False
+        guard.clear_payload()
+        guard.update_scene(observed_scene['apples'], observed_scene['boxes'], target_apple_id=None)
+        return True
+    def observe_drop():
+        # Read-only observation; the arm has not yet been cleared out of view.
+        return replace(safe_snapshot(), tray_clear=False)
+    mission = MissionController(cfg, runner, scan_capture,
+        prepare_recovery=prepare_recovery, observe_drop=observe_drop)
+    return LiveRuntime(studio, adapter, pipeline, mission, scan_capture)

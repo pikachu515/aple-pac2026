@@ -197,12 +197,14 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
         runner = (make_runner or (lambda c, p: SceneRunner.from_config(c, p, light_for=light_for)))(cfg, pipeline)
 
     manager = CycleManager(cfg, capture=capture, plan_scene=runner.plan, execute_scene=runner.execute,
-                           make_records=runner.records, dry_run_capture=capture, dry_run=not (args.execute or args.simulate))
+                           make_records=runner.records, dry_run_capture=capture, dry_run=not (args.execute or args.simulate),
+                           failure_records=getattr(runner, 'failure_records', None),
+                           stop_requested=(lambda: runner.halted) if hasattr(runner, 'halted') else None)
     records = manager.run(cycles)
     print_records(records)
     blocked = [r for r in records if r.failure_code.name == "ABORTED" and r.target_cell < 0]
-    if blocked:
-        print("※ 실행하지 않은 장면이 있다 - 조명 FAULT 면 회색 카드 재보정 후 다시 (전략 S3-8)")
+    if blocked and not getattr(runner, 'halted', False):
+        print("※ 실행하지 않은 장면이 있습니다. 결과와 로그에서 중단 원인을 확인하세요.")
     if world is not None:
         print(f"  가상 이동 {sum(e['action'] == 'move' for e in world.events)}회, "
               f"파지 {sum(e['action'] == 'grasp' for e in world.events)}회, "
@@ -214,6 +216,17 @@ def main(argv: list[str] | None = None, *, make_runner: Callable[[dict, PickPlac
                                                 apples=world.apples), indent=2), encoding="utf-8")
         if any(not r.success for r in records if r.task_action.name in ('PICK_PLACE', 'PICK_INSPECT_PLACE')):
             raise SystemExit("시뮬레이션 실행 실패: 위 결과와 trace를 확인하세요")
+    if getattr(runner, 'halted', False):
+        log_dir = Path(cfg['orchestration']['logging']['csv_dir'])
+        reason = getattr(runner, 'halt_reason', None) or '중단 사유가 제공되지 않았습니다'
+        raise SystemExit(
+            f"M4 미션 중단: {reason}\n"
+            "다음 작업을 차단했습니다. 현재 파지 상태와 현장을 확인한 뒤 새 실행을 시작하세요.\n"
+            f"기록: {log_dir / 'cycles.csv'}, {log_dir / 'mission_events.jsonl'}")
+    from aple.orchestration.speed_trial import speed_trial_advice
+    advice = speed_trial_advice(cfg, records, live_execution=args.execute, cycles=cycles)
+    if advice is not None:
+        print("※ " + advice)
     return records
 
 

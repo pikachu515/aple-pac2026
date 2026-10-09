@@ -85,6 +85,10 @@ class SceneRunner:
         self._capture_for_verification = capture_for_verification
         self._before_execute = before_execute
         self._execution_halted = False
+        self.last_verified_snapshot = None
+        self._verify_timeout = float(cfg["orchestration"].get("verify_timeout_s", 5.0))
+        if not math.isfinite(self._verify_timeout) or self._verify_timeout <= 0:
+            raise ValueError("verify_timeout_s must be finite and positive")
 
     @classmethod
     def from_config(cls, cfg: dict, pipeline: PickPlacePipeline, **kwargs) -> "SceneRunner":
@@ -134,6 +138,7 @@ class SceneRunner:
                          {"t_scan_s": t_scan, "t_plan_s": self._clock() - t0 - t_scan})
 
     def execute(self, plan: ScenePlan) -> SceneWorkPlan | None:
+        self.last_verified_snapshot = None
         if plan.work is None:
             return None
         if plan.work.scene_id != plan.snapshot.scene_id:
@@ -191,6 +196,7 @@ class SceneRunner:
                 completed[item.apple.apple_id] = replace(one, timings={**one.timings, 't_total_s': self._clock()-started})
                 break
             try:
+                deadline = self._clock() + self._verify_timeout
                 post = self._capture_for_verification()
                 if (not isinstance(post, SceneSnapshot) or post.source != Source.TOP
                         or post.capture_mode != CaptureMode.FULL
@@ -202,6 +208,8 @@ class SceneRunner:
                     raise ValueError('lighting fault during placement verification')
                 post_boxes = tuple(self._boxes(post))
                 one = self.pipeline.verify_item(one, latest[1], post_boxes)
+                if self._clock() > deadline:
+                    raise TimeoutError("placement verification deadline exceeded")
             except TimeoutError:
                 one = replace(one, execution=ExecResult(False, FailureCode.TIMEOUT, Phase.RETREAT))
                 post = None
@@ -214,6 +222,7 @@ class SceneRunner:
             remaining.remove(item.apple.apple_id)
             if not one.execution.success:
                 break
+            self.last_verified_snapshot = post
             if remaining:
                 # plan() estimates fresh positions and grades, preserving tracking.
                 current = self.plan(post)

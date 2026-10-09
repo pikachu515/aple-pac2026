@@ -237,8 +237,8 @@ def test_live_factory_wires_adapter_capture_verification_and_common_fk(tmp_path,
     assert captured['tool_pose_provider'] is fk
     assert captured['in_hand_capture_provider']._tool_pose_fn is fk
     assert callable(captured['holding_verifier'])
-    assert runtime.runner._capture_for_verification is runtime.capture
-    assert runtime.runner._capture_for_retry is runtime.capture
+    assert runtime.runner.runner._capture_for_verification is runtime.capture
+    assert runtime.runner.runner._capture_for_retry is runtime.capture
 
 
 def test_retry_grasp_planner_receives_all_observed_neighbors(cfg):
@@ -327,3 +327,20 @@ def test_invalid_live_measurements_report_missing_without_robot(tmp_path, mutate
     c = measured_fixture(tmp_path)
     mutate(c)
     assert missing_for_live_execution(c)
+
+
+def test_placement_verification_timeout_blocks_next_apple(cfg):
+    runner, initial, adapter = verified_runner(cfg)
+    timer = [0.]
+    runner._clock = lambda: timer[0]
+    capture = runner._capture_for_verification
+    def late_capture():
+        result = capture()
+        timer[0] += runner._verify_timeout + 1.
+        return result
+    runner._capture_for_verification = late_capture
+    result = runner.execute(initial)
+    executed = [i for i in result.items if i.execution is not None]
+    assert len(executed) == 1
+    assert executed[0].execution.failure_code == FailureCode.TIMEOUT
+    assert runner.last_verified_snapshot is None

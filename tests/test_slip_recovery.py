@@ -126,6 +126,7 @@ def test_no_free_reject_cell_stops_instead_of_dropping(cfg):  # noqa: F811
 
 
 def test_recovery_speed_may_not_exceed_the_safety_limit(cfg):  # noqa: F811
+    cfg["safety"]["speed_scale_max"] = 0.5
     cfg["execution"]["recovery"]["speed_scale"] = cfg["safety"]["speed_scale_max"] + 0.1
     _, pipeline, held = held_apple(cfg)
 

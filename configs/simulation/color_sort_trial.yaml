@@ -1,0 +1,24 @@
+# SIMULATION ONLY: 중앙의 사과를 색으로 분류 (빨강 → 왼쪽 상자, 노랑 → 오른쪽 상자).
+# 실측 workcell 이 아니다. 좌표는 base_link (+X 앞, +Y 왼쪽), 단위 m·kg.
+color_sort_trial:
+  base_scene: configs/simulation/in_hand_speed_search_scene.yaml
+  speed_profile: configs/simulation/in_hand_speed_selected.yaml
+  apples:
+    count: 3
+    region_xy_m: [[0.26, 0.47], [-0.06, 0.06]]   # 사과 중심이 놓일 중앙 영역 (seed 로 무작위)
+    min_distance_m: 0.10                         # 사과 중심 간 최소 거리 (지름 0.087)
+    diameter_m: 0.0873
+    mass_kg: 0.2971
+  # 색은 seed 로 빨강/노랑 무작위. 상자 크기 = grid [행(Y), 열(X)] × 칸 0.12 m
+  boxes:
+    red:    {grade: UPPER,  center_m: [0.33, 0.29],  grid: [2, 3]}   # 왼쪽, 6칸 (0.36 × 0.24 m)
+    yellow: {grade: MIDDLE, center_m: [0.33, -0.29], grid: [2, 3]}   # 오른쪽, 6칸
+  transfer_height_m: 0.20
+  transfer_tilt_rad: 2.4435
+  start_xy_m: [0.30, 0.0]          # 시작·복귀 자세 (사과 영역 위)
+  start_joint_rad: null
+  set:                              # pick_place_trial 과 같은 빠른 설정
+    - execution.soft_landing.slow_speed_scale=0.05
+    - assumed_gripper.gripper_settle_s=0.2
+    - simulation.in_hand_scene.optimization.transfer_route_choice=first_valid
+    # 이송면 경로·놓는 자세는 configs/execution.yaml execution.transfer 값을 그대로 쓴다 (실기 어댑터 경로)

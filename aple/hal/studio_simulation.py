@@ -23,7 +23,8 @@ def scene_from_config(cfg):
         red = float(apple['red_fraction'])
         objects.append(dict(id=f'aple_apple_{i+1}', label=f'Apple {i+1}', shape='sphere',
                             size=[float(apple['radius_m'])], pos=list(apple['center_m']),
-                            rgba=[.2 + .6 * red, .75 - .6 * red, .1, 1], mass=.1, movable=True))
+                            rgba=list(apple.get('rgba') or [.2 + .6 * red, .75 - .6 * red, .1, 1]),
+                            mass=.1, movable=True))
     for grade, box in cfg['workcell']['boxes'].items():
         pitch = float(box['cell_pitch_m'])
         rows, cols = box['grid']

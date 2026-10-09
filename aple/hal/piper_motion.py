@@ -136,6 +136,7 @@ class PiperTrajectoryMotionAdapter:
             limits,
             max_joint_step_rad=step,
         )
+        self._transfer = _transfer_settings(cfg['execution'].get('transfer'))
 
     def _empty_transit_speed(self, requested):
         # Explicitly slow recovery/contact moves retain their requested speed.
@@ -200,6 +201,8 @@ class PiperTrajectoryMotionAdapter:
             ):
                 return PhaseAResult(False, FailureCode.TIMEOUT, Phase.APPROACH, False, False)
             self._load_state = 'empty'
+            self._transfer_over((targets.pregrasp_pose,),
+                speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
             self._move_poses((targets.pregrasp_pose,),
                 speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
             # Descent close to the fruit retains the normal approach speed.
@@ -220,6 +223,7 @@ class PiperTrajectoryMotionAdapter:
             self._load_state = 'held'
             self._set_payload(targets.apple_in_tcp, apple)
             phase = Phase.TRANSIT
+            self._transfer_over((targets.hover_pose,), speed_scale=speed_scale, deadline=deadline)
             self._move_poses((targets.hover_pose,), speed_scale=speed_scale, deadline=deadline)
         except TrajectoryPlanningError as exc:
             return PhaseAResult(False, exc.failure_code, phase, holding, False)
@@ -257,6 +261,8 @@ class PiperTrajectoryMotionAdapter:
                     False, FailureCode.TIMEOUT, Phase.APPROACH, False, False, None, None
                 )
             self._load_state = 'empty'
+            self._transfer_over((targets.pregrasp_pose,),
+                speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
             self._move_poses((targets.pregrasp_pose,),
                 speed_scale=self._empty_transit_speed(speed_scale), deadline=deadline)
             # Descent close to the fruit retains the normal approach speed.
@@ -313,10 +319,12 @@ class PiperTrajectoryMotionAdapter:
         if task_text:
             raise ValueError("task_text is not used by the scripted backend")
         try:
+            deadline = self._deadline(timeout_s)
+            self._transfer_over((targets.hover_pose,), speed_scale=speed_scale, deadline=deadline)
             self._move_poses(
                 (targets.hover_pose,),
                 speed_scale=speed_scale,
-                deadline=self._deadline(timeout_s),
+                deadline=deadline,
             )
         except TrajectoryPlanningError as exc:
             return PhaseAResult(False, exc.failure_code, Phase.TRANSIT, True, False)
@@ -473,6 +481,22 @@ class PiperTrajectoryMotionAdapter:
             profile, inspection_plan, effort=effort, timeout_s=timeout_s
         ).success
 
+    def _transfer_over(self, targets: tuple[Pose3D, ...], *, speed_scale: float, deadline: float) -> None:
+        """Rise to the transfer plane, cross it, and stop above the target.
+
+        The caller then descends to the target itself. ``execution.transfer``
+        null keeps the previous direct motion. All poses pass the same IK and
+        segment checks as any other Cartesian move.
+        """
+        if self._transfer is None:
+            return
+        current = self._transport.tool_pose()
+        poses = transfer_plane_poses(current, targets[0], **self._transfer)
+        if current is None:
+            poses = poses[-1:]  # unknown current pose: go straight to the point above the target
+        if poses:
+            self._move_poses(poses, speed_scale=speed_scale, deadline=deadline)
+
     def _move_poses(
         self,
         poses: tuple[Pose3D, ...],
@@ -561,6 +585,57 @@ class PiperTrajectoryMotionAdapter:
         return remaining
 
 
+def _transfer_settings(value):
+    if value is None or value.get('height_m') is None:
+        return None
+    height = value['height_m']
+    tilt = value.get('outward_tilt_rad', 0.0)
+    for name, number in (('height_m', height), ('outward_tilt_rad', tilt)):
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number):
+            raise ValueError(f'execution.transfer.{name} must be a finite number')
+    if height <= 0:
+        raise ValueError('execution.transfer.height_m must be positive')
+    if not -math.pi/2 < tilt < math.pi/2:
+        raise ValueError('execution.transfer.outward_tilt_rad must be within ±90°')
+    return dict(height_m=float(height), outward_tilt_rad=float(tilt))
+
+
+def transfer_plane_poses(current: Pose3D | None, target: Pose3D, *, height_m: float,
+                         outward_tilt_rad: float) -> tuple[Pose3D, ...]:
+    """Waypoints: above the current XY on the plane, then above the target XY.
+
+    The plane orientation is the target orientation tilted by ``outward_tilt_rad``
+    about the horizontal axis normal to the target's radial direction (tool tip
+    outward from the base), then yawed with each waypoint's bearing. Base-frame
+    only, so it does not depend on the tool RPY convention.
+    """
+    if (current is not None and target.position_m[2] >= height_m
+            and math.dist(current.position_m[:2], target.position_m[:2]) < 1e-3):
+        return ()
+    bearing = math.atan2(target.position_m[1], target.position_m[0])
+    axis = (-math.sin(bearing), math.cos(bearing), 0.0)
+    tilted = _quat_multiply(_axis_quat(axis, -outward_tilt_rad), target.orientation_xyzw)
+
+    def at(xy):
+        turn = math.atan2(xy[1], xy[0]) - bearing
+        return Pose3D((float(xy[0]), float(xy[1]), height_m),
+                      _quat_multiply(_axis_quat((0.0, 0.0, 1.0), turn), tilted))
+    above = at(target.position_m[:2])
+    return (above,) if current is None else (at(current.position_m[:2]), above)
+
+
+def _axis_quat(axis, angle):
+    half = angle / 2
+    return (axis[0]*math.sin(half), axis[1]*math.sin(half), axis[2]*math.sin(half), math.cos(half))
+
+
+def _quat_multiply(left, right):
+    lx, ly, lz, lw = left
+    rx, ry, rz, rw = right
+    return (lw*rx + lx*rw + ly*rz - lz*ry, lw*ry - lx*rz + ly*rw + lz*rx,
+            lw*rz + lx*ry - ly*rx + lz*rw, lw*rw - lx*rx - ly*ry - lz*rz)
+
+
 def build_piper_motion_adapter(
     studio,
     cfg: dict,
@@ -588,8 +663,11 @@ def build_piper_motion_adapter(
 
     from aple.execution.timed_motion import MotionLimits
     limits_cfg = cfg['execution'].get('motion')
+    # Timed motion needs the whole measured set; live preflight refuses a partial one.
+    keys = ('velocity_limits_rad_s', 'acceleration_limits_rad_s2', 'command_period_s',
+            'tracking_tolerance_rad', 'velocity_tolerance_rad_s')
     limits = (MotionLimits.from_config(limits_cfg)
-              if limits_cfg and limits_cfg.get('velocity_limits_rad_s') is not None else None)
+              if limits_cfg and all(limits_cfg.get(k) is not None for k in keys) else None)
     transport = PiperStudioMotionTransport(
         studio,
         max_joint_step_rad=cfg["execution"]["trajectory"]["max_joint_step_rad"],

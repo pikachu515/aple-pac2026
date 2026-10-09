@@ -101,6 +101,9 @@ LIMIT_EDGE_DEG = 5.0
 #: 측정 속도 = 관절 변화 / max(읽기 간격, 이 값). 관절값에 로봇 쪽 시각이 없어 연달아 읽으면 속도가 부푼다
 VELOCITY_MIN_WINDOW_S = 0.1
 
+#: 도착을 기다리는 동안 같은 목표를 이 간격으로 다시 보낸다 — robotd 데드맨(500 ms)보다 충분히 짧게
+GOAL_RESEND_S = 0.2
+
 
 def _arrival_gap(current, target_rad, gripper_position, target) -> str:
     """도착 대기 시간 초과 때 어디서 멈췄는지 — robotd 바닥 필터·관절 범위가 목표를 줄였는지, 덜 따라왔는지 가린다."""
@@ -510,6 +513,14 @@ class PiperStudio:
                     while True:
                         keepalive.check()
                         self.verify_gripper_torque()
+                        if time.monotonic() - last_sent >= GOAL_RESEND_S:
+                            # robotd 데드맨: 명령이 500 ms 끊기면 그 자리에 세운다. 목표를 한 번만 보내고 기다리면
+                            # 0.5 s 넘게 걸리는 그리퍼 닫기·마지막 접근이 도중에 멈췄다 (10/10 실기: 그리퍼 70.9 % 에서 정지)
+                            resent = self._request("POST", "/api/robots/jog/goal",
+                                                   {"iface": self._iface, "values": target})
+                            if not isinstance(resent, dict) or resent.get("status") != "ok":
+                                raise PiperWebError("Piper Web did not confirm the repeated joint goal")
+                            last_sent = time.monotonic()
                         current, gripper_position = sample_checked()
                         if time.monotonic() >= deadline:
                             raise PiperWebError("Timed out waiting for trajectory: arrival feedback "

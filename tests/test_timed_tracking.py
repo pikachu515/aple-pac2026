@@ -82,3 +82,24 @@ def test_arrival_timeout_reports_where_the_arm_stopped(piper_web, monkeypatch):
     limits = MotionLimits((1.,)*6, (2.,)*6, .05, 1., 1.)
     with pytest.raises(PiperWebError, match=r'worst joint1 5\.7°'):
         studio.send_timed_joint_trajectory((TimedJointGoal(target, .2),), limits, speed_scale=1., timeout_s=1.)
+
+
+def test_goal_is_repeated_while_waiting_so_robotd_deadman_does_not_freeze(piper_web, monkeypatch):
+    """10/10 실기: 목표를 한 번만 보내고 기다리자 robotd 데드맨(500 ms)이 그리퍼 닫기 도중에 세웠다."""
+    _, studio = piper_web
+    start = studio.joint_state()
+    target = (start[0] + .05, *start[1:])
+    goals = []
+    clock = _drive(monkeypatch, studio, lambda t: ((target if t > 1.0 else start), 0.))   # 1 s 뒤에야 도착
+    plain = studio._request
+
+    def counting(method, path, body=None):
+        if path.endswith('/goal'):
+            goals.append(clock[0])
+        return plain(method, path, body)
+
+    monkeypatch.setattr(studio, '_request', counting)
+    limits = MotionLimits((1.,)*6, (2.,)*6, .05, 1., 1.)
+    studio.send_timed_joint_trajectory((TimedJointGoal(target, .1),), limits, speed_scale=1., timeout_s=3.)
+    gaps = [b - a for a, b in zip(goals, goals[1:])]
+    assert len(goals) >= 4 and max(gaps) < .5                         # 데드맨보다 자주 다시 보냈다

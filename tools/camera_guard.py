@@ -24,11 +24,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from typing import Callable
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 log = logging.getLogger("camera_guard")
 
@@ -66,14 +67,30 @@ def plan_fixes(cameras: list[dict], entries: list[dict],
 
 
 class Studio:
-    def __init__(self, base_url: str, timeout_s: float = 5.0) -> None:
-        self.base, self.timeout = base_url.rstrip("/"), timeout_s
+    """Piper Studio REST. 로그인이 켜져 있으면 PIPER_WEB_PASSWORD(환경변수)로 로그인한다 — 비밀번호를 파일에 두지 않는다."""
 
-    def _req(self, method: str, path: str, body: dict | None = None):
+    def __init__(self, base_url: str, timeout_s: float = 5.0) -> None:
+        from http.cookiejar import CookieJar
+        from urllib.request import HTTPCookieProcessor, build_opener
+        self.base, self.timeout = base_url.rstrip("/"), timeout_s
+        self._opener = build_opener(HTTPCookieProcessor(CookieJar()))
+
+    def _send(self, method: str, path: str, body: dict | None = None):
         data = None if body is None else json.dumps(body).encode()
         req = Request(self.base + path, data=data, method=method, headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=self.timeout) as r:
+        with self._opener.open(req, timeout=self.timeout) as r:
             return json.loads(r.read() or b"null")
+
+    def _req(self, method: str, path: str, body: dict | None = None):
+        from urllib.error import HTTPError
+        try:
+            return self._send(method, path, body)
+        except HTTPError as e:
+            password = os.environ.get("PIPER_WEB_PASSWORD")
+            if e.code != 401 or not password:
+                raise
+            self._send("POST", "/api/auth/login", {"password": password})
+            return self._send(method, path, body)
 
     def cameras(self) -> list[dict]:
         return self._req("GET", "/api/cameras/current").get("cameras", [])

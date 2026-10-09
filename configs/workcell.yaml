@@ -4,7 +4,7 @@ workcell:
   expected_apple_count: 5
   frames: {base: base_link, camera: camera_top_optical_frame, tcp: tcp}
   T_base_camera: [[0.103219, 0.967163, -0.232255, 0.615884], [0.994628, -0.102211, 0.016401, -0.036306], [-0.007877, -0.2327, -0.972517, 0.918479], [0, 0, 0, 1]] # [임시] 10/9 20:40 카메라 이동 후 ArUco hand-eye (손목 마커 1개, 12자세 위치 맞춤) 잔차 중앙 4.8 mm·LOO 6.4 mm (data/calib/handeye_1009.json)
-  tcp_offset_m: [0.0032, 0.002, 0.1823]    # [임시] 10/9 20:42 피벗 6자세 (회전 152°, 잔차 중앙 ~8 mm — 끝 미끄러짐) data/calib/pivot_1009.json. 자 실측(플랜지 면) 143 mm 와 다름 — link6 원점이 면보다 안쪽
+  tcp_offset_m: [0.0032, 0.002, 0.2023]    # [실측 10/10] 10/9 20:42 피벗 6자세 (회전 152°, 잔차 중앙 ~8 mm — 끝 미끄러짐) data/calib/pivot_1009.json. 자 실측(플랜지 면) 143 mm 와 다름 — link6 원점이 면보다 안쪽
   tray:                         # base_link 축 정렬 사각형
     center_m: null              # [x, y, z] 트레이 바닥 윗면 중심 (m), 현장 실측. null 이면 영상 전체에서 검출
     size_m: [0.3, 0.2]

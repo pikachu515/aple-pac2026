@@ -132,8 +132,11 @@ def cmd_card(folder: Path, roi_arg: str | None, file_arg: str | None) -> CardCal
     (folder / "card.json").write_text(json.dumps(calib.to_dict(), indent=2), encoding="utf-8")
     print(f"기준 사진 {path.name}, 카드 영역 {roi}")
     print(f"카드 밝기 {card_brightness(color, roi):.0f} (118 근처가 좋다. 200 이상이면 노출 과다, 60 이하면 부족)")
-    if calib.card_depth_m is not None:
-        print(f"카드 면 깊이 {calib.card_depth_m * 1000:.0f} mm (이보다 가까운 픽셀은 카드로 치지 않는다)")
+    if calib.card_plane is not None:
+        z, du, dv = calib.card_plane
+        x, y, w, h = roi
+        print(f"카드 면 깊이 {z * 1000:.0f} mm, 카드 안 깊이 차 가로 {abs(du) * w * 1000:.0f} mm · 세로 {abs(dv) * h * 1000:.0f} mm "
+              "(이 면보다 가까운 픽셀은 카드로 치지 않는다)")
     print(f"채널 게인 R {calib.rgb_gain[0]:.2f}  G {calib.rgb_gain[1]:.2f}  B {calib.rgb_gain[2]:.2f}")
     print(f"저장: {folder / 'card.json'}")
     return calib

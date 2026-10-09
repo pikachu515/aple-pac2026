@@ -14,9 +14,13 @@ APPLE = Apple((0.0, 0.0, 0.5), 0.04, half_red)
 FINGER_GRAY = 70                                         # 카드(118)보다 어두운 회색 그리퍼
 
 
-def scene(finger_frac=0.0, finger_gray=FINGER_GRAY, tint=(1.0, 1.0, 1.0)):
-    """카드 왼쪽 finger_frac 만큼을 회색 핑거가 카드 10 cm 위에서 가린 장면."""
+TILT = 0.0006                                            # m/px — 10/9 실측 카메라 기울기 (카드 폭 65 px 에 4 cm)
+
+
+def scene(finger_frac=0.0, finger_gray=FINGER_GRAY, tint=(1.0, 1.0, 1.0), tilt=0.0):
+    """카드 왼쪽 finger_frac 만큼을 회색 핑거가 카드 10 cm 위에서 가린 장면. tilt: 가로 방향 깊이 기울기."""
     color, depth, _ = render([APPLE], card_rect=CARD_ROI, tint=tint)
+    depth = depth + tilt * (np.arange(depth.shape[1]) - depth.shape[1] / 2)[None, :]
     if finger_frac > 0:
         x, y, w, h = CARD_ROI
         fw = int(w * finger_frac)
@@ -25,8 +29,8 @@ def scene(finger_frac=0.0, finger_gray=FINGER_GRAY, tint=(1.0, 1.0, 1.0)):
     return color, depth
 
 
-def card_and_depth(finger_frac=0.0):
-    color, depth = scene(finger_frac)
+def card_and_depth(finger_frac=0.0, tilt=0.0):
+    color, depth = scene(finger_frac, tilt=tilt)
     return color, CARD_ROI, depth
 
 
@@ -34,10 +38,21 @@ def test_calibration_stores_card_depth_and_round_trips():
     color, depth = scene()
     calib = calibrate_card(color, CARD_ROI, depth)
     x, y, w, h = CARD_ROI
-    assert calib.card_depth_m == pytest.approx(float(np.median(depth[y:y + h, x:x + w])), abs=0.005)
+    assert calib.card_plane[0] == pytest.approx(float(np.median(depth[y:y + h, x:x + w])), abs=0.005)
     assert CardCalib.from_dict(calib.to_dict()) == calib
-    old = {k: v for k, v in calib.to_dict().items() if k != "card_depth_m"}   # 예전 card.json 도 읽힌다
-    assert CardCalib.from_dict(old).card_depth_m is None
+    old = {k: v for k, v in calib.to_dict().items() if k != "card_plane"}   # 예전 card.json 도 읽힌다
+    assert CardCalib.from_dict(old).card_plane is None
+
+
+def test_tilted_camera_card_is_not_mistaken_for_occlusion():
+    """10/9 실측: 카메라가 기울어 평평한 카드도 폭 안에서 깊이가 4 cm 변한다 — 한 값으로 보면 '66% 가려짐'."""
+    calib = calibrate_card(*card_and_depth(tilt=TILT))
+    assert calib.card_plane[1] == pytest.approx(TILT, rel=0.05)
+    color, depth = scene(tilt=TILT)
+    assert lighting_status(color, calib, depth_m=depth).light_state == LightState.OK
+    color, depth = scene(0.6, tilt=TILT)                                     # 기울어진 채로 핑거도 걸러진다
+    assert lighting_status(color, calib, depth_m=depth, min_visible=0.3).light_state == LightState.OK
+    assert not lighting_status(color, calib, depth_m=depth).card_valid
 
 
 def test_calibration_ignores_gray_finger_over_half_the_card():

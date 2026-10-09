@@ -117,3 +117,18 @@ def test_profile_takes_candidate_opening_within_gripper_range():
     assert _with_candidate_opening(prof, cand, c).open_width_m == pytest.approx(0.086)
     assert _with_candidate_opening(prof, type("C", (), {"open_width_m": 0.2})(), c).open_width_m == pytest.approx(0.12)
     assert _with_candidate_opening(prof, None, c).open_width_m == pytest.approx(0.09)
+
+
+def test_neighbour_apples_may_be_pushed_but_walls_may_not():
+    """10/10 현장: 이웃 사과는 조금 밀면서 들어가도 잡히지만 벽은 침범하면 안 된다 — 두 허용치를 따로 본다."""
+    tight = [apple(1, 0.30, 0.0), apple(2, 0.30, 2 * R + 0.005), apple(3, 0.30, -(2 * R + 0.005))]   # 이웃 틈 5 mm
+    c = grasp_cfg(True)
+    c["grasp_planner"].update(min_clearance_m=0.0, min_wall_clearance_m=0.0)
+    assert not plan_grasps(tight, c)[0].collision_free                  # 틈이 좁아 양쪽 다 막힘
+    c["grasp_planner"].update(min_clearance_m=-0.02)                      # 이웃 사과만 밀어도 됨
+    assert plan_grasps(tight, c)[0].collision_free
+    c["grasp_planner"].update(min_wall_clearance_m=None)                  # 벽 허용치 미지정 = 사과와 같다 (예전 동작)
+    assert plan_grasps(tight, c)[0].collision_free
+    wall = [apple(1, 0.30 + 0.05 - R, 0.0)]                               # x 쪽 벽(트레이 x 0.25~0.35)에 붙은 사과
+    c["grasp_planner"].update(min_clearance_m=-0.02, min_wall_clearance_m=0.0, yaw_step_deg=180)  # x 로 닫는 방향만
+    assert not plan_grasps(wall, c)[0].collision_free                     # 이웃 허용치를 넓혀도 벽은 그대로

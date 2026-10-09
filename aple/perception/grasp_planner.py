@@ -160,12 +160,17 @@ def plan_grasps(apples: list[AppleState], cfg: dict) -> list[GraspCandidate]:
 
 
 def _finger_clearance(c, u, reach, others, tray, fr, cap, p) -> float:
-    """핑거 두 발자국(사과 중심 ± reach·u)과 이웃 사과·트레이 벽 사이 최소 간격."""
-    clear = cap
+    """핑거 두 발자국(사과 중심 ± reach·u)과 이웃 사과·트레이 벽 사이 최소 간격.
+
+    이웃 사과와 벽의 허용치를 따로 본다 (10/10 현장: 이웃 사과는 조금 밀면서 들어가도 자연스럽게 잡히지만 벽은
+    침범하면 안 된다). 돌려주는 값 = min(사과 간격 − min_clearance_m, 벽 간격 − min_wall_clearance_m) + min_clearance_m
+    — 호출 쪽의 `clear >= min_clearance_m` 판정이 두 조건을 모두 뜻하고, 벽 허용치를 따로 안 주면 예전과 같다.
+    """
+    apple_clear = wall_clear = cap
     for s in (1.0, -1.0):
         f = c + s * reach * u
         for oc, orad in others:
-            clear = min(clear, float(np.linalg.norm(f - oc)) - orad - fr)
+            apple_clear = min(apple_clear, float(np.linalg.norm(f - oc)) - orad - fr)
         if tray.get("center_m") is not None:
             tx, ty, _ = tray["center_m"]
             wm = float(p["tray_wall_margin_m"])
@@ -175,8 +180,11 @@ def _finger_clearance(c, u, reach, others, tray, fr, cap, p) -> float:
                 d = f[axis] - ctr
                 side = ("x" if axis == 0 else "y") + ("_min" if d < 0 else "_max")
                 if side not in open_sides:
-                    clear = min(clear, half - abs(d) - fr)
-    return clear
+                    wall_clear = min(wall_clear, half - abs(d) - fr)
+    min_apple = float(p["min_clearance_m"])
+    min_wall = p.get("min_wall_clearance_m")
+    min_wall = min_apple if min_wall is None else float(min_wall)
+    return min(apple_clear - min_apple, wall_clear - min_wall) + min_apple
 
 
 def tool_orientation_at(center_xy, cfg: dict, yaw_rad: float | None = None) -> tuple[float, float, float, float]:

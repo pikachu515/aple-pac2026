@@ -5,7 +5,8 @@ grasp_planner:
   open_margin_m: 0.01             # [임시] 핑거 안쪽 면 ↔ 사과 표면 여유 (사전 개방 폭 = 직경 + 2 × 이 값)
   finger_thickness_m: 0.012       # [임시] 핑거 + 어댑터 + 패드 두께 (닫힘 방향)
   finger_width_m: 0.02            # [임시] 핑거 폭 (닫힘 방향에 수직)
-  min_clearance_m: -0.005          # [현장 10/10 04:50] 0 → -5 mm: 핑거 발자국 원 모델이 실제보다 크다 — 리더암으로는 벽·이웃에 안 걸리는 사과 2개가 보류됐다
+  min_clearance_m: -0.012          # [현장 10/10 05:20] 이웃 사과까지 핑거 간격 하한. 음수 = 이만큼 겹쳐도 됨 — 이웃 사과는 조금 밀면서 들어가도 자연스럽게 잡힌다(리더암 시연)
+  min_wall_clearance_m: -0.002     # [현장 10/10 05:20] 트레이 벽까지 핑거 간격 하한 — 벽은 거의 침범하지 않는다 (발자국 원 모델 여유만큼만). null 이면 min_clearance_m 과 같다
   approach_height_m: 0.08         # 집기 전 자세 = 집는 자세 위 이 높이
   tool_down_rpy_deg: [180, 0, 0]  # [임시] TCP 가 아래를 보는 자세 (base_link RPY). 역할 B IK 규약과 맞춘다
   max_clearance_m: 0.2

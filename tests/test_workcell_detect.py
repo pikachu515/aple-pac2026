@@ -221,3 +221,25 @@ def test_cli_on_snapshot_and_save(tmp_path, monkeypatch):
     saved = yaml.safe_load(workcell.read_text(encoding="utf-8"))["workcell"]["boxes"]
     assert saved["UPPER"]["origin_m"] == pytest.approx(list(det.named()["UPPER"].origin_m), abs=1e-3)
     assert saved["REJECT"]["wall_height_m"] == 0
+
+
+def test_assign_removes_box_by_identity_when_several_candidates():
+    """10/9 실기: 손이 상자 옆에 들어와 '제외' 후보가 생기자 list.remove 가 ndarray 필드 비교로 터졌다."""
+    from aple.perception.workcell_detect import BoxDetection, _assign
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(BoxDetection)}
+    cfg = load_config()
+    T = np.asarray(camera_looking_down() if not isinstance(camera_looking_down(), tuple) else camera_looking_down()[0])
+    left, right = side_vector(T, "left"), side_vector(T, "right")
+
+    def box(xy):
+        base = {name: None for name in fields}
+        base.update(center_xy=np.asarray(xy, float), usable=True, flat=False)
+        try:
+            return BoxDetection(**base)
+        except TypeError:
+            pytest.skip("BoxDetection 생성자가 바뀌었다")
+
+    near_left, far_left, far_right = box(0.10 * left[:2]), box(0.30 * left[:2]), box(0.30 * right[:2])
+    p = {"assign": {"UPPER": "left", "MIDDLE": "right"}}
+    _assign([near_left, far_left, far_right], T, p, (0.0, 0.0))             # 터지지 않으면 된다

@@ -553,7 +553,7 @@ def _assign(boxes: list[BoxDetection], T: np.ndarray, p: dict, ref_xy) -> list[s
             continue
         b = max(cands, key=lambda b: float(np.dot(b.center_xy, v)))
         b.name = name
-        remaining.remove(b)
+        remaining = [r for r in remaining if r is not b]   # dataclass 의 == 는 ndarray 필드에서 모호하다 — 같은 객체로 뺀다
     for b in remaining:
         b.usable = False
         b.note = "배정 규칙(assign)에 맞는 자리가 없다 — 쓰지 않는다"

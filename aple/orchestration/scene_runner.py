@@ -220,6 +220,13 @@ class SceneRunner:
             rows.append(self._row(snap, item.task.apple_id, done.apple,
                                   done.final_grade or grade_by_id.get(item.task.apple_id),
                                   done, ex, success, code, stage, t_scan, t_plan, t_exec))
+        if execution is None:
+            # Dry-run plans reserve cells too; no apple was placed in those cells.
+            # Executed reservations must remain until external placement verification.
+            for item in plan.work.items:
+                placement = item.placement
+                if placement is not None and placement.feasible:
+                    self.pipeline.release_placement_reservation(int(placement.box_id), placement.cell_index)
         return rows
 
     # ------------------------------------------------------------ 내부

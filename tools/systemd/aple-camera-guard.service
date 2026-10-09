@@ -1,0 +1,16 @@
+# Piper Studio 프로파일 적용 버그(노출이 기본값으로 풀림) 감시 — tools/camera_guard.py
+# 설치: cp tools/systemd/aple-camera-guard.service ~/.config/systemd/user/
+#       systemctl --user daemon-reload && systemctl --user enable --now aple-camera-guard
+# 로그: journalctl --user -u aple-camera-guard -f
+[Unit]
+Description=APLE camera profile guard (re-apply exposure reset by Piper Studio)
+After=piper-rsd.service
+
+[Service]
+WorkingDirectory=%h/projects/aple-pac2026
+ExecStart=%h/projects/aple-pac2026/.venv/bin/python tools/camera_guard.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

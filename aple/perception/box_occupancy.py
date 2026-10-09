@@ -35,6 +35,7 @@ _BOX_DEFAULTS = {
     "occupied_min_height_m": 0.025, # 바닥보다 이만큼 높으면 점유 (사과 반경보다 작게)
     "wall_band_m": 0.02,            # 벽 윗면을 재는 둘레 띠 폭
     "max_unknown_fraction": 0.5,    # 판단 불가 칸이 이 비율을 넘으면 상자 측정 무효
+    "max_object_height_m": None,    # 바닥보다 이만큼 넘게 높은 점은 사과가 아니다(팔·손) — 칸 높이에서 뺀다. null = 빼지 않음
 }
 
 
@@ -110,6 +111,10 @@ def _estimate_box(snap, box_id: Grade, box: dict, pts: np.ndarray, valid: np.nda
         ratio = float(np.count_nonzero(poly & valid)) / float(poly.sum())
         sel = (np.abs(pts[:, 0] - cx) <= half) & (np.abs(pts[:, 1] - cy) <= half)
         z = pts[sel, 2]
+        if p.get("max_object_height_m") is not None:
+            # 10/9 실기: 촬영 자세의 접힌 그리퍼가 베이스 가까운 리젝트 칸 위에 떠 있어 18 cm '점유' 장애물이 됐고,
+            # 팔이 자기 자신과 충돌한다고 판정돼 모든 이동이 막혔다
+            z = z[z <= z0 + float(p["max_object_height_m"])]
         if ratio < p["min_valid_ratio"] or len(z) < p["min_points"]:
             heights.append(wall_top)                        # 판단 불가 → 점유로 (보수적)
             occupied.append(True)

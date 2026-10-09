@@ -33,3 +33,4 @@ perception:
     occupied_min_height_m: 0.025  # 바닥보다 이만큼 높으면 점유 (최소 사과 반경보다 작게)
     wall_band_m: 0.02
     max_unknown_fraction: 0.5
+    max_object_height_m: 0.13     # [실기 10/9] 바닥 위 13 cm 넘는 점은 팔·손 — 칸 높이에서 뺀다 (사과 최대 ~110 mm)

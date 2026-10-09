@@ -16,6 +16,7 @@ FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_jso
               "workcell.poses.home_joint_rad", "workcell.poses.scan_joint_rad",
               "workcell.auto_detect.enabled",  # 자동 검출은 그 시험(test_workcell_detect)에서만 켠다
               "grasp_planner.tilt_start_m",    # 먼 곳 기울여 잡기는 그 시험(test_tilted_grasp)에서만 켠다
+              "perception.box.max_object_height_m",   # 팔·손 높이 거르기 (10/9 실기) — 시험은 기본(끔)
               # 역할 B 실기 실행 값 (10/9 제안 PR) — 시험은 실측 전 상태로 본다
               "safety.joint_limits_rad", "safety.workspace_aabb_m",
               *(f"safety.segment_validation.{k}" for k in (

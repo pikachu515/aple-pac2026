@@ -12,20 +12,34 @@ from pathlib import Path
 import aple.config as _config
 
 #: 현장에서 채우는 값 — 시험에서는 비어 있는 것으로 본다
-FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_json")
+FIELD_KEYS = ("workcell.T_base_camera", "workcell.tcp_offset_m", "color.card_json",
+              "workcell.poses.home_joint_rad", "workcell.poses.scan_joint_rad",
+              # 역할 B 실기 실행 값 (10/9 제안 PR) — 시험은 실측 전 상태로 본다
+              "safety.joint_limits_rad", "safety.workspace_aabb_m",
+              *(f"safety.segment_validation.{k}" for k in (
+                  "sample_step_rad", "floor_z_m", "clearance_m", "wall_thickness_m", "support_contact_tolerance_m",
+                  "obstacle_aabbs_m", "self_collision_pairs", "payload_self_links")),
+              *(f"execution.motion.{k}" for k in (
+                  "velocity_limits_rad_s", "acceleration_limits_rad_s2", "command_period_s", "tracking_tolerance_rad",
+                  "velocity_tolerance_rad_s", "capture_joint_tolerance_rad")),
+              *(f"execution.gripper.{k}" for k in (
+                  "closing_compression_m", "contact_settle_s", "contact_width_tolerance_m", "contact_stability_m")))
+
+#: null 이 아닌 실측 전 값 (자리표시자)
+PRISTINE_VALUES = {"piper_web.iface": "PLACEHOLDER_follower", "piper_web.camera_id": "PLACEHOLDER_d435"}
 
 _original_load = _config.load_config
 
 
 def _pristine(cfg: dict) -> dict:
     cfg = copy.deepcopy(cfg)
-    for dotted in FIELD_KEYS:
+    for dotted, value in [*((k, None) for k in FIELD_KEYS), *PRISTINE_VALUES.items()]:
         *parents, leaf = dotted.split(".")
         node = cfg
         for key in parents:
             node = node.get(key, {})
         if leaf in node:
-            node[leaf] = None
+            node[leaf] = value
     return cfg
 
 
@@ -42,6 +56,12 @@ PRISTINE_LINES = {
     "workcell.yaml": {
         "  T_base_camera:": "  T_base_camera: null           # 4x4, eye-to-hand 캘리브레이션 결과 (m)",
         "  tcp_offset_m:": "  tcp_offset_m: null            # 핑거 어댑터 반영",
+        "    home_joint_rad:": "    home_joint_rad: null        # 6 rad. 시작·종료·복구 자세",
+        "    scan_joint_rad:": "    scan_joint_rad: null        # 6 rad. 탑뷰 촬영 자세 (팔·그림자가 트레이·상자를 가리지 않게)",
+    },
+    "execution.yaml": {
+        '  iface:': '  iface: "PLACEHOLDER_follower"  # PLACEHOLDER: 시뮬/실행 전 Piper Web 등록 follower 이름으로 교체',
+        '  camera_id:': '  camera_id: "PLACEHOLDER_d435"  # PLACEHOLDER: 시뮬/실행 전 실제 D435 camera id로 교체',
     },
     "color.yaml": {
         "  card_json:": "  card_json: null                 # tools/color_session.py card 결과 경로 (현장 세션 폴더의 card.json). CardMonitor 가 읽는다",

@@ -8,12 +8,12 @@ execution:
   motion:                      # 실기 시간 기준 궤적. 모두 현장 제어·추종 측정 후 입력
     speed_trial_steps: [0.5, 0.6, 0.7, 0.8] # 전체 실기 성공 후 다음 시험 후보만 안내. 자동 변경 없음
     empty_speed_scale: 1.0     # 확인된 빈손 접근·후퇴·scan: 실측 속도/가속도 한도까지. 물체 근처 하강·복구는 기존 속도
-    velocity_limits_rad_s: null # 관절별 6개
-    acceleration_limits_rad_s2: null
-    command_period_s: null
-    tracking_tolerance_rad: null
-    velocity_tolerance_rad_s: null
-    capture_joint_tolerance_rad: null # 촬영 전후 관절 변화 허용치
+    velocity_limits_rad_s: [0.6, 0.6, 0.6, 0.8, 0.8, 1.0] # [제안 10/9 — 역할 B 확인] 약 34~57°/s — 첫 실기는 느리게
+    acceleration_limits_rad_s2: [1.0, 1.0, 1.0, 1.5, 1.5, 2.0] # [제안 10/9 — 역할 B 확인]
+    command_period_s: 0.05     # [제안 10/9 — 역할 B 확인] 20 Hz — Studio 릴레이가 ~30 Hz 로 안정 전송(10/9 관찰)
+    tracking_tolerance_rad: 0.05 # [제안 10/9 — 역할 B 확인] 2.9°
+    velocity_tolerance_rad_s: 0.2 # [제안 10/9 — 역할 B 확인]
+    capture_joint_tolerance_rad: 0.0087 # [제안 10/9 — 역할 B 확인] 0.5° — 촬영 전후 관절 변화 허용치
   timeouts: {named_pose_s: 20.0, phase_a_s: 30.0, phase_b_s: 15.0, inspect_s: 30.0}
   recovery:                    # 미끄러짐 복구 동작 (PR #15 합의: 전부 저속, 공중에서 그리퍼 열기 금지)
     speed_scale: 0.2           # [임시] 복구 이동 속도. safety.speed_scale_max 이하여야 한다
@@ -25,20 +25,20 @@ execution:
     slip_width_m: 0.002
     opening_margin_m: 0.005    # 초기값: 사과 직경보다 5 mm 여유
     fixed_effort: 1000         # 0.001 N·m 단위: 1000 = 1 N·m. v0.5.12 Studio 저장값과 일치해야 실행
-    closing_compression_m: null # 실측 패드 변형/접촉을 반영한 안쪽 닫힘 목표. 임의 값 복사 금지
-    contact_settle_s: null
-    contact_width_tolerance_m: null
-    contact_stability_m: null
+    closing_compression_m: 0.004 # [제안 10/9 — 역할 B 확인] 직경보다 4 mm 안쪽 목표 (힘은 고정 effort 가 정한다). 사과 몇 개로 확인
+    contact_settle_s: 0.5      # [제안 10/9 — 역할 B 확인]
+    contact_width_tolerance_m: 0.008 # [제안 10/9 — 역할 B 확인] 측정 폭 ↔ 예상 직경 (M1 직경 오차 포함)
+    contact_stability_m: 0.001 # [제안 10/9 — 역할 B 확인] 안정 판정 폭 변동
 piper_web:
   enabled: false               # 실기 연결은 안전 설정과 follower iface 확인 후 명시적으로 활성화
   base_url: "http://127.0.0.1"   # Piper Web v0.5.9 는 80번 포트 (docs/environment.md)
-  iface: "PLACEHOLDER_follower"  # PLACEHOLDER: 시뮬/실행 전 Piper Web 등록 follower 이름으로 교체
+  iface: "can_follower"          # [제안 10/9 — 역할 B 확인] udev 로 고정한 팔로워 (CAN 어댑터 시리얼 002B…)
   request_timeout_s: 3.0
   goal_timeout_s: 20.0
   poll_interval_s: 0.1
   arrival_tolerance_rad: 0.017453292519943295
   gripper_arrival_tolerance: 2.0
-  camera_id: "PLACEHOLDER_d435"  # PLACEHOLDER: 시뮬/실행 전 실제 D435 camera id로 교체
+  camera_id: "rs:243122071248:color"  # [제안 10/9 — 역할 B 확인] Studio 카메라 id (10/9 확인)
   robotd_safety_confirmed: false
   joint_limits_deg:
     joint1: [-150, 150]
@@ -47,4 +47,4 @@ piper_web:
     joint4: [-100, 100]
     joint5: [-65, 65]
     joint6: [-120, 120]
-  gripper_width_range_m: [0.0, 0.07]  # PLACEHOLDER: 시뮬/실행 전 실측 [닫힘, 열림] 폭으로 교체
+  gripper_width_range_m: [0.0, 0.07]  # PLACEHOLDER: 수제 핑거 [닫힘, 열림] 접촉 폭 실측 필요 (역할 D) — 기본 Piper 값 그대로

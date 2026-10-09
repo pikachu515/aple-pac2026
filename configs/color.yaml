@@ -3,5 +3,5 @@
 # aple/inspection/color.py 가 같은 일을 한다.
 color:
   gray_card: {target_srgb: 118, delta_e_warn: 2.5, delta_e_fault: 6.0}
-  card_json: null                 # tools/color_session.py card 결과 경로 (현장 세션 폴더의 card.json). CardMonitor 가 읽는다
+  card_json: data/field/1009_light2/card.json  # [실측 10/9 20:35] 카메라 이동 후 대회장 조명 (카드 밝기 127, 게인 R0.76 G1.12 B0.84, 카드 깊이 평면 포함 — PR #38 코드로 만듦)
   patch_json: null                # [미사용 10/8] 대회장 실내라 레퍼런스 패치 보정은 쓰지 않는다 (전략 S3-8). 비워 두면 회색 카드만

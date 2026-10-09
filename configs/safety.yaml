@@ -3,7 +3,7 @@
 safety:
   joint_limits_rad: null      # 실측 전에는 scripted motion 금지
   workspace_aabb_m: null       # measured [[x_min,x_max], [y_min,y_max], [z_min,z_max]]
-  speed_scale_max: 0.5
+  speed_scale_max: 1.0          # 10/9: 시뮬 색 분류와 같은 속도 (execution.motion 한계값 그대로). 이전 0.5
   gripper_effort_max: 1000     # Piper Web v0.5.9 고정 effort 상한
   segment_validation:
     sample_step_rad: null

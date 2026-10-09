@@ -1,0 +1,36 @@
+# SIMULATION ONLY: 사과 1개 집기 → 상자 적재 → 시작 자세 복귀 시간 시험.
+# 실측 workcell 이 아니다. 좌표는 base_link, 단위 m·rad·kg.
+pick_place_trial:
+  # 카메라·이송 높이·원호·물리 기본값을 가져오는 장면. 사과·상자 위치는 아래 값으로 바꾼다
+  base_scene: configs/simulation/in_hand_speed_search_scene.yaml
+  # 속도 프로파일 (in_hand 속도 탐색 선택값). null 이면 base_scene 의 기본 속도
+  speed_profile: configs/simulation/in_hand_speed_selected.yaml
+  apple:
+    center_m: [0.40, -0.15]        # 인식(M1)에서 받았다고 가정한 사과 중심 XY. Z 는 바닥 위 반지름
+    diameter_m: 0.0873
+    mass_kg: 0.2971
+    perception_error_m: [0, 0, 0]  # 계획에 넘기는 좌표에만 더하는 인식 오차 (물리 사과는 그대로)
+  target_box: MIDDLE               # UPPER | MIDDLE | REJECT
+  box:
+    center_m: null                 # null: seed 로 무작위 / [x, y]: 상자 중심 고정
+    region_xy_m: [[0.10, 0.55], [-0.38, 0.38]]
+    reach_radius_m: [0.30, 0.49]   # 상자 중심의 베이스 거리 범위
+    min_distance_from_apple_m: 0.17
+    max_attempts: 200
+  other_boxes: park                # park: 나머지 상자는 로봇 뒤로 치움 / random: 장애물로 함께 무작위 배치
+  # 높은 이송면(TCP 높이)과 이송 중 툴 기울기 (π = 수직 하향). 파지 자세 160° 는 J5 한계(±65°) 때문에
+  # TCP 0.14 m 정도까지만 닿는다. 140° 는 X 0.25~0.48 m 에서 0.20~0.24 m 까지 닿는다 (10/9 IK 확인).
+  # 기존 in-hand 처럼 툴 수평으로 옮기려면 transfer_tilt_rad: 1.5708, transfer_height_m: 0.24
+  transfer_height_m: 0.20
+  transfer_tilt_rad: 2.4435        # 140°. null: 파지 자세(tool_down) 기울기
+  # 시작·복귀 자세: 이송면 위 이 XY 에서 IK 로 구한다. start_joint_rad 를 주면 그 관절값을 쓴다
+  start_xy_m: [0.30, 0.0]
+  start_joint_rad: null
+  # 기본으로 적용하는 --set 값 (명령의 --set 이 뒤에 적용되어 우선한다). 10/9 seed 1~5 에서
+  # 사이클 7.60 → 4.22 s, 5/5 성공. 모두 시뮬레이션 가정이며 실기 값이 아니다
+  set:
+    - execution.soft_landing.slow_speed_scale=0.05       # 마지막 3 cm 감속 (기존 0.008). 사과 손상 모델 없음
+    - execution.trajectory.max_cartesian_step_m=0.06     # 직선 경유점 간격 (기존 0.01: 1 cm 마다 멈춰 도착 확인)
+    - assumed_gripper.gripper_settle_s=0.2               # 그리퍼 개폐 대기 (기존 0.4). 실제 그리퍼 개폐 시간 미측정
+    # 이송 경로 후보(직선·원호)를 모두 계산하지 않고 첫 번째 안전한 경로를 쓴다. 사과를 든 직후 계산 멈춤 약 1 s → 0.35 s
+    - simulation.in_hand_scene.optimization.transfer_route_choice=first_valid

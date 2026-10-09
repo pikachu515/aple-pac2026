@@ -73,6 +73,9 @@ def optimization_config(cfg, path):
         radius = settings.get('opaque_cup_radius_m')
         if isinstance(radius, bool) or not isinstance(radius, (int, float)) or not math.isfinite(radius) or radius <= 0:
             raise ValueError('vertical inspection requires a positive opaque_cup_radius_m')
+    settings.setdefault('transfer_route_choice', 'shortest')
+    if settings['transfer_route_choice'] not in ('shortest', 'first_valid'):
+        raise ValueError("transfer_route_choice must be 'shortest' or 'first_valid'")
     out = copy.deepcopy(cfg)
     scene = out['simulation']['in_hand_scene']
     for key in ('loaded_joint_velocity_rad_s','rotation_joint_velocity_rad_s'):
@@ -181,6 +184,9 @@ def execute_shorter_transfer(adapter, candidates, *, speed_scale, timeout_s):
                     cost += max(.02, float(np.max(abs(np.array(point)-current)))/speed)
                     current = np.array(point)
                 choices.append((cost, name, points))
+                # first_valid: skip the remaining candidates' planning time.
+                if getattr(transport, 'optimization', {}).get('transfer_route_choice') == 'first_valid':
+                    break
             except (ValueError, RuntimeError) as exc:
                 rejected.append(dict(route=name, reason=str(exc)))
     if not choices:

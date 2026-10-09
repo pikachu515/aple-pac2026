@@ -127,6 +127,22 @@ class LiveRuntime:
     capture: object
 
 
+def recovery_scene_ready(guard, joints, apples, boxes, *, target_apple_id):
+    """APPROACH/DESCEND 실패 뒤 scan 으로 물러나기 전에 충돌 검사 장면을 다시 세운다. → 출발 자세가 안전하면 True.
+
+    모든 사과를 장애물로 넣는 것이 기본이다. 그런데 팔은 방금 집으려던 사과 바로 옆(집기 전 자세)에 멈춰 있어서,
+    그 사과까지 넣으면 출발 자세부터 충돌로 판정돼 어떤 경로도 나갈 수 없다 (10/10 실기: IK_FAIL·COLLISION 직후
+    0.1~1.6 s 만에 'scan pose could not be reached safely' 로 정지). 그때만 그 사과 하나를 빼고, 다른 사과와 상자 벽은
+    그대로 둔다. 그래도 출발 자세가 막혀 있으면 False — 운영자 확인으로 넘긴다.
+    """
+    guard.clear_payload()
+    guard.update_scene(apples, boxes, target_apple_id=None)
+    if guard.is_segment_safe(joints, joints):
+        return True
+    guard.update_scene(apples, boxes, target_apple_id=target_apple_id)
+    return bool(guard.is_segment_safe(joints, joints))
+
+
 def build_live_runtime(config, capture, light_for):
     from aple.hal.piper_studio import PiperStudio
     from aple.hal.piper_motion import build_piper_motion_adapter
@@ -196,9 +212,8 @@ def build_live_runtime(config, capture, light_for):
         joints = studio.joint_state()
         if len(joints) != 6 or not np.isfinite(joints).all():
             return False
-        guard.clear_payload()
-        guard.update_scene(observed_scene['apples'], observed_scene['boxes'], target_apple_id=None)
-        return True
+        return recovery_scene_ready(guard, joints, observed_scene['apples'], observed_scene['boxes'],
+                                    target_apple_id=item.apple.apple_id)
     def observe_drop():
         # Read-only observation; the arm has not yet been cleared out of view.
         return replace(safe_snapshot(), tray_clear=False)

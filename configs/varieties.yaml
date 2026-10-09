@@ -41,6 +41,7 @@ inspection:
     min_pixels: 200               # 이보다 적으면 같은 자세에서 다시 찍는다
     retries: 1
   views:                          # 모드 B: 툴 수평(약 90°) 후 J6 90° x4 → 커버리지 약 0.9
+    center_m: null                 # [선택] base_link 검사 중심. null이면 집어 올린 위치 사용
     tilt_rad: 1.5708
     rotation_angles_rad: [0.0, 1.5708, 3.1416, 4.7124]
     settle_time_s: 0.3

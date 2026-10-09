@@ -207,18 +207,19 @@ Piper Web v0.5.9의 카메라 JPEG 프리뷰와 raw 조명 측정값은 HAL에�
 하며, 누락 시 실패를 명시한다. `LightingStatus`도 보정-aware provider를 주입해야 하고,
 raw 조명 측정값만으로 보정 상태를 추정하지 않는다.
 
-역할 B의 `PiperTrajectoryMotionAdapter`는 좌표를 m/rad, 자세를 xyzw 단위 쿼터니언으로
-받고, 주입된 IK·구간 안전 검사·속도 지정 가능한 전송 계층으로 Pick/Place와 인핸드
-검사 순서를 실행한다. Piper Web v0.5.9 HAL은 조그 세션 하나 안에서 관절 목표들을
-순서대로 보내고 각 목표 도달을 확인하는 `send_joint_trajectory()`를 제공한다. 그러나
-호출별 속도와 TCP 정지 자세는 제공하지 않으며, 실제 연속 궤적 동작도 시뮬레이션에서
-검증해야 한다. 따라서 이 API만으로 `PiperTrajectoryMotionAdapter`의 속도 계약이나
-Phase B 감속을 보장할 수 없다. 실제 연결에는 속도·정지 계약을 제공하는 Piper 측 전송
-계층과 카메라의 정렬 컬러·깊이·내참수 캡처 provider가 필요하다. HAL의
-`PiperStudioMotionTransport` 는 Piper Web v0.5.9에서 속도 명령이 없을 때
-joint waypoint 를 더 잘게 쪼개 감속을 근사하지만, 이건 실증된 속도 계약이 아니라
-시뮬레이션/실기 확인 전의 보조 경로다. 고정 effort 파지 완료는 센서 측정이 아니라
-그리퍼 명령 승인에 근거한 가정이다.
+역할 B의 `PiperTrajectoryMotionAdapter`는 SI 좌표·xyzw 자세, 공통 TCP 변환의 IK/FK와
+구간 안전 검사로 Pick/Place 및 인핸드 검사를 실행한다. `PiperStudioMotionTransport`는
+실측 관절 속도·가속도·주기를 사용한 시간 궤적을 한 jog 세션으로 보내며, 실제 속도와
+추종 오차 및 파지 후 폭 변화를 감시한다. 공간 분할점 수만으로 감속을 근사하던 경로는
+제거했다. jog API 자체의 속도 계약은 없으므로 실물 추종·모터 가속도·정지는 별도 검증한다.
+
+고정 effort의 설정 일치를 확인한 뒤 접촉 부근 폭 안정과 리프트 후 새 깊이 영상으로
+파지 여부를 확인한다. 설정 토크는 과실의 접촉력 측정이 아니다. 실기 객체 조립은
+`hal/live_runtime.py`에서 담당하며, 미측정 설정이면 `--live --execute`를 거부한다.
+실기 루프는 사과 하나를 실행하고 새 TOP 영상으로 안착을 검증한 뒤 남은 ID의 좌표·상자
+점유·충돌 환경을 갱신한다. 드라이런 예약은 실제 실행 예약을 소비하지 않는다.
+검사 자세와 옆 회전 시뮬레이션은 공통 생성기를 사용한다. 자세/속도/충돌 검사 범위와
+실측 설정은 [review_fixes.md](review_fixes.md)를 참고한다.
 
 모드 B의 각 캡처는 원래 장면보다 큰 고유 `scene_id`, `Source.IN_HAND`, `CaptureMode.FULL`,
 측정 TCP 자세, 마스크와 사과 좌표계 회전을 가져야 한다. 현재 재등급 구현은 이를
@@ -232,3 +233,7 @@ home/scan도 구간 검사를 거친다. 실행 방법·모델 버전·충돌 �
 기존 움직이는 좌우 핑거에 장착하는 수제 어댑터는 `configs/gripper_attachment.yaml`에서
 관리한다. 사진의 점 사이 거리는 mm 참조값이며, 활성화된 장착 기하만 SI 단위로 변환해
 TCP·개폐 간격·파지 외형·추가 충돌 구에 연결한다. [장착 설정 안내](gripper_attachment.md) 참조.
+
+M4의 실기 미션은 `MissionController`가 감싼다. 설정한 과실 수와 트레이 시야를 확인하고,
+보류·복구 재촬영을 제한하며 각 적재 확인 후 새 좌표로 계획한다. 실패 예외 기록과
+운영자 이벤트도 포함한다. 연결 계약과 자동 복구 한계는 [m4_mission.md](m4_mission.md) 참고.

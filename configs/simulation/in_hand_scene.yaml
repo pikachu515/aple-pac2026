@@ -1,0 +1,37 @@
+# SIMULATION ONLY. Representative Korean Fuji sizes, not a nationwide mean.
+# KREI/RDA study: 252/297.1/337 g, transverse 82.6/87.3/91.9 mm.
+# https://www.krei.re.kr/attach/pdf/91374p.pdf
+in_hand_scene:
+  # Contact cup sized for ~87 mm fruit; still an assumption, not measured CAD.
+  gripper_overrides: {cup_radius_m: 0.046, max_goal_settle_s: 2.0}
+  initial_joint_rad: [0.0, 0.750168, -0.150425, 0.0, -0.512495, 0.0]
+  apple_specs:
+    - {diameter_m: 0.0826, mass_kg: 0.252, red_fraction: 0.02}
+    - {diameter_m: 0.0873, mass_kg: 0.2971, red_fraction: 0.5}
+    - {diameter_m: 0.0919, mass_kg: 0.337, red_fraction: 0.9}
+  map_xy_m: [[0.10, 0.55], [-0.38, 0.38]]
+  reach_radius_m: [0.30, 0.49]  # high transfer poses must fit the Piper wrist limits
+  box_cell_pitch_m: 0.12
+  object_min_distance_m: 0.17
+  clearance_m: 0.025
+  inspection_center_m: [0.325, 0.0, 0.24]  # exact XY midpoint of this virtual map
+  inspection_clear_radius_m: 0.08
+  transfer_arc_radius_m: 0.40
+  transfer_arc_step_rad: 0.08
+  far_place_radius_m: 0.48
+  far_place_tilt_rad: 2.617993878  # 150 degrees, far bin wrist clearance
+  max_layout_attempts: 20000
+  preopen_m: 0.110
+  grip_open_delta_m: 0.006
+  camera_height_m: 0.80
+  workspace_aabb_m: [[0.05, 0.60], [-0.40, 0.40], [0.001, 0.65]]
+  empty_joint_velocity_rad_s: 1.0
+  loaded_joint_velocity_rad_s: 0.35
+  rotation_joint_velocity_rad_s: 0.20
+  max_slip_m: 0.012
+  tilt_rad: 1.5708
+  # Tilt first, then rotate about the tool axis (J6); stay within +/-120 deg.
+  rotation_angles_rad: [-1.745329, -0.610865, 0.610865, 1.745329]
+  settle_time_s: 0.3
+  video_fps: 5
+  transfer_height_m: 0.24

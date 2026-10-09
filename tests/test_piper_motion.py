@@ -53,6 +53,7 @@ class FakeTransport:
         self.calls = []
         self.pose = None
         self.gripper_success = True
+        self.holding_confirmed = True
 
     def joint_state(self):
         return self.joints
@@ -68,6 +69,9 @@ class FakeTransport:
 
     def tool_pose(self):
         return self.pose
+
+    def confirm_holding(self, apple, apple_in_tcp, *, timeout_s):
+        return self.holding_confirmed
 
     def capture_in_hand(self, apple_id, view_index, *, timeout_s):
         self.calls.append(("capture", apple_id, view_index, timeout_s))

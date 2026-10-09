@@ -29,9 +29,9 @@ def test_soft_landing_has_slow_final_descent_release_and_retreat():
         approach_speed_scale=0.5,
     )
 
-    assert plan.slow_descent_start_z_m == pytest.approx(0.12)
+    assert plan.slow_descent_start_z_m == pytest.approx(0.13)
     assert [step.pose.position_m[2] for step in plan.steps] == pytest.approx(
-        [0.12, 0.1, 0.15]
+        [0.13, 0.1, 0.15]
     )
     assert [step.gripper_action for step in plan.steps] == [
         GripperAction.HOLD,
@@ -59,8 +59,10 @@ def test_soft_landing_uses_slow_motion_when_entire_drop_is_short():
         approach_speed_scale=0.5,
     )
 
-    assert plan.slow_descent_start_z_m == pytest.approx(0.1)
-    assert plan.steps[0].pose.position_m[2] == pytest.approx(0.1)
+    assert plan.slow_descent_start_z_m == pytest.approx(0.11)
+    assert plan.steps[0].pose.position_m[2] == pytest.approx(0.11)
+    assert plan.steps[1].pose.position_m[2] == pytest.approx(0.1)
+    assert plan.steps[1].speed_scale == pytest.approx(0.1)
 
 
 def test_soft_landing_rejects_hover_below_release():

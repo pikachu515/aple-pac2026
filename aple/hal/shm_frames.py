@@ -99,6 +99,7 @@ def read_pair(color: ShmReader, depth: ShmReader, max_skew_ms: float = 50.0,
     while time.monotonic() < deadline:
         c, d = color.read(), depth.read()
         if c is not None and d is not None and abs(c[2] - d[2]) <= max_skew_ms * 1e6:
-            return c[0], d[0], c[2]
+            # Earliest exposure: freshness must hold for both color and depth.
+            return c[0], d[0], min(c[2], d[2])
         time.sleep(0.005)
     return None

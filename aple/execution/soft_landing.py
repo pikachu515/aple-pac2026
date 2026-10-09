@@ -47,7 +47,7 @@ def build_soft_landing_plan(
 
     place_z = targets.place_pose.position_m[2]
     hover_z = targets.hover_pose.position_m[2]
-    slow_start_z = max(place_z, hover_z - final_descent_m)
+    slow_start_z = min(hover_z, place_z + final_descent_m)
     slow_start_pose = Pose3D(
         (
             targets.place_pose.position_m[0],

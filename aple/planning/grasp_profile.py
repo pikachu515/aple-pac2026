@@ -85,8 +85,19 @@ def select(apple: AppleState, cfg: dict) -> GraspProfile:
     if not math.isfinite(height_offset_mm):
         raise ValueError("size-bin grasp_height_offset_mm must be finite")
 
+    measured_range = cfg.get("piper_web", {}).get("gripper_width_range_m")
+    width_ok = False
+    if measured_range is not None:
+        if (not isinstance(measured_range, (list, tuple)) or len(measured_range) != 2
+                or any(isinstance(v, bool) for v in measured_range)):
+            raise ValueError("gripper_width_range_m must contain measured closed/open widths")
+        closed, opened = map(float, measured_range)
+        if not all(math.isfinite(v) for v in (closed, opened)) or not 0 <= closed < opened:
+            raise ValueError("gripper_width_range_m must be finite and increasing")
+        width_ok = closed <= diameter_m <= opened and closed <= open_width_m <= opened
+
     if control_mode == "fixed_effort":
-        if effort_limit is None or effort > effort_limit:
+        if not width_ok or effort_limit is None or effort > effort_limit:
             return GraspProfile(
                 scene_id=apple.scene_id,
                 apple_id=apple.apple_id,
@@ -111,7 +122,7 @@ def select(apple: AppleState, cfg: dict) -> GraspProfile:
         )
 
     calibrated_force = _calibrated_force(size_cfg, mass_kg)
-    if calibrated_force is None:
+    if not width_ok or calibrated_force is None:
         return GraspProfile(
             scene_id=apple.scene_id,
             apple_id=apple.apple_id,

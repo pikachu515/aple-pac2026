@@ -12,8 +12,65 @@ import numpy as np
 import yaml
 
 
+def optical_ring_dimensions(assumptions):
+    """Measured diameters are config-only mm; model geometry uses m."""
+    outer = assumptions.get('opaque_cup_outer_diameter_mm')
+    inner = assumptions.get('opaque_cup_inner_diameter_mm')
+    if outer is None and inner is None:
+        return None
+    for value in (outer, inner):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError('ring diameters must be positive finite numbers')
+    if inner >= outer:
+        raise ValueError('ring inner diameter must be smaller than outer diameter')
+    return outer / 2000., inner / 2000.
+
+
+def add_optical_ring(spec, body, name, pos, outer, inner, curve=None, sign=1):
+    """Separate convex sectors preserve a real aperture in MuJoCo ray tests.
+
+    A single convex mesh would fill the hole. Thickness remains an assumption.
+    """
+    import mujoco
+    sectors = 96
+    inner_vertex = inner / math.cos(math.pi / sectors)
+    faces = [0,2,1,0,3,2,4,5,6,4,6,7]
+    for edge in range(4):
+        nxt = (edge+1) % 4
+        faces.extend([edge,nxt,nxt+4,edge,nxt+4,edge+4])
+    for index in range(sectors):
+        angles = np.array([index,index+1]) * 2*math.pi/sectors
+        xy = [[r*math.cos(a),r*math.sin(a)] for r,a in
+              [(inner_vertex,angles[0]),(outer,angles[0]),(outer,angles[1]),(inner_vertex,angles[1])]]
+        vertices = [[x,y,z+(sign*(curve-math.sqrt(curve**2-x*x-y*y)) if curve else 0.)]
+                    for z in (-.0015,.0015) for x,y in xy]
+        mesh = f'aple_ring_{name}_{index}'
+        spec.add_mesh(name=mesh,uservert=np.array(vertices).reshape(-1).tolist(),userface=faces)
+        body.add_geom(name=mesh,type=mujoco.mjtGeom.mjGEOM_MESH,meshname=mesh,
+            pos=pos,quat=[math.sqrt(.5),math.sqrt(.5),0,0],
+            rgba=[1,1,1,1],mass=0,contype=0,conaffinity=0)
+
+
 def load_assumptions(path):
     cfg = yaml.safe_load(Path(path).read_text(encoding='utf-8'))['assumed_gripper']
+    optical_ring_dimensions(cfg)
+    if not isinstance(cfg.get('concave_ring',False),bool):
+        raise ValueError('concave_ring must be boolean')
+    ring=optical_ring_dimensions(cfg)
+    if ring and cfg.get('concave_ring') and cfg['cup_radius_m']<=ring[0]:
+        raise ValueError('cup curvature radius must exceed ring outer radius')
+    clearance=cfg.get('ring_pad_clearance_m',.0005)
+    if isinstance(clearance,bool) or not isinstance(clearance,(int,float)) or not math.isfinite(clearance) or clearance<0:
+        raise ValueError('ring_pad_clearance_m must be finite and nonnegative')
+    opaque = cfg.get('opaque_cup_radius_m')
+    if opaque is not None and (isinstance(opaque, bool) or not isinstance(opaque, (int, float)) or not math.isfinite(opaque) or opaque <= 0):
+        raise ValueError('opaque_cup_radius_m must be positive and finite')
+    if 'top_camera_fovy_deg' in cfg:
+        fovy = cfg['top_camera_fovy_deg']
+        if isinstance(fovy,bool) or not isinstance(fovy,(int,float)) or not math.isfinite(fovy) or not 0 < fovy < 180:
+            raise ValueError('invalid top_camera_fovy_deg')
+    if 'top_camera_align_xy' in cfg and not isinstance(cfg['top_camera_align_xy'],bool):
+        raise ValueError('top_camera_align_xy must be boolean')
     for key in ('closed_contact_gap_m', 'finger_stroke_m', 'cup_radius_m', 'pad_radius_m',
                 'pad_mass_kg', 'shaft_radius_m', 'shaft_mass_kg', 'finger_servo_kp_n_m',
                 'finger_force_limit_n', 'closing_compression_m', 'gripper_settle_s',
@@ -49,6 +106,18 @@ def build_assumed_model(scene, assumptions):
     import mujoco
     from piper_sim import scene_spec
     spec = scene_spec.compose(scene)
+    # The central-inspection scene owns its virtual camera location. Studio's
+    # scene schema otherwise permits only top-camera height, with fixed XY.
+    for obj in scene.get('objects', []):
+        if obj['id'] == 'aple_inspection_center':
+            for camera in spec.cameras:
+                if camera.name == 'top':
+                    camera.pos[:2] = obj['pos'][:2]
+                    if 'top_camera_fovy_deg' in assumptions:
+                        camera.fovy = assumptions['top_camera_fovy_deg']
+                    if assumptions.get('top_camera_align_xy'):
+                        camera.alt.type = mujoco.mjtOrientation.mjORIENTATION_XYAXES
+                        camera.alt.xyaxes = [1,0,0,0,1,0]
     for sign, name in ((1, 'finger_l'), (-1, 'finger_r')):
         body = spec.body(name)
         if body is None:
@@ -63,16 +132,40 @@ def build_assumed_model(scene, assumptions):
         tcp_z = assumptions['flange_tcp_m'][2] - .065
         radius = assumptions['pad_radius_m']
         curve = assumptions['cup_radius_m']
-        for i, x in enumerate(assumptions['cup_grid_offsets_m']):
-            for j, z in enumerate(assumptions['cup_grid_offsets_m']):
-                sag = math.sqrt(curve ** 2 - x ** 2 - z ** 2) - curve
-                body.add_geom(name=f'aple_pad_{name}_{i}_{j}', type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                    pos=[x, sign * (offset + sag + radius), tcp_z + z], size=[radius, 0, 0],
-                    rgba=[.15, .35, .75, 1], mass=assumptions['pad_mass_kg'], condim=6,
-                    friction=assumptions['pad_friction'], solref=assumptions['pad_solref'])
+        ring = optical_ring_dimensions(assumptions)
+        concave=assumptions.get('concave_ring',False)
+        if ring is not None:
+            add_optical_ring(spec,body,name,[0,sign*(offset+.0015),tcp_z],*ring,curve=curve if concave else None,sign=sign)
+        elif assumptions.get('opaque_cup_radius_m'):
+            # Optical silhouette only. Do not pretend a convex cylinder models
+            # the real concave shell's collision mechanics or mass.
+            body.add_geom(name=f'aple_opaque_{name}', type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                pos=[0, sign*(offset+.0015), tcp_z],
+                quat=[math.sqrt(.5), math.sqrt(.5), 0, 0],
+                size=[assumptions['opaque_cup_radius_m'], .0015, 0],
+                rgba=[1,1,1,1], mass=0, contype=0, conaffinity=0)
+        if ring is not None and concave:
+            outer,inner=ring
+            contact_radius=inner+radius+assumptions.get('ring_pad_clearance_m',.0005)
+            if contact_radius+radius>=outer:
+                raise ValueError('contact pads do not fit outside the ring aperture')
+            sag=math.sqrt(curve**2-contact_radius**2)-curve
+            pad_points=[(contact_radius*math.cos(a),contact_radius*math.sin(a),sag)
+                        for a in np.linspace(0,2*math.pi,12,endpoint=False)]
+            pad_mass=assumptions['pad_mass_kg']*len(assumptions['cup_grid_offsets_m'])**2/12
+        else:
+            pad_points=[(x,z,math.sqrt(curve**2-x**2-z**2)-curve)
+                        for x in assumptions['cup_grid_offsets_m'] for z in assumptions['cup_grid_offsets_m']]
+            pad_mass=assumptions['pad_mass_kg']
+        for i,(x,z,sag) in enumerate(pad_points):
+            body.add_geom(name=f'aple_pad_{name}_{i}', type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                pos=[x, sign * (offset + sag + radius), tcp_z + z], size=[radius, 0, 0],
+                rgba=[1, 1, 1, 1], mass=pad_mass, condim=6,
+                friction=assumptions['pad_friction'], solref=assumptions['pad_solref'])
+        shaft_end=tcp_z-ring[0]-assumptions['shaft_radius_m'] if ring is not None and concave else tcp_z
         body.add_geom(name=f'aple_shaft_{name}', type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-            fromto=[0, sign * (offset + .012), .02, 0, sign * (offset + .012), tcp_z],
-            size=[assumptions['shaft_radius_m'], 0, 0], rgba=[.55, .55, .58, 1],
+            fromto=[0, sign * (offset + .012), .02, 0, sign * (offset + .012), shaft_end],
+            size=[assumptions['shaft_radius_m'], 0, 0], rgba=[1, 1, 1, 1],
             mass=assumptions['shaft_mass_kg'])
     camera_position = np.asarray(assumptions['side_camera_position_m'], dtype=float)
     camera_target = np.asarray(assumptions['side_camera_target_m'], dtype=float)
@@ -106,8 +199,16 @@ def physics_scene(cfg, assumptions):
     scene['name'] = 'APLE assumed gripper physics'
     for obj in scene['objects']:
         if obj['shape'] == 'sphere':
-            obj['mass'] = assumptions['apple_mass_kg']
+            index = int(obj['id'].removeprefix('aple_apple_')) - 1
+            obj['mass'] = cfg['simulation']['apples'][index].get('mass_kg', assumptions['apple_mass_kg'])
             obj['friction'] = list(assumptions['apple_friction'])
+    inspection = cfg['simulation'].get('in_hand_scene')
+    if inspection:
+        scene['cameras']['top']['z'] = inspection['camera_height_m']
+        scene['objects'].append(dict(id='aple_inspection_center', label='INSPECTION CENTER',
+            shape='cylinder', size=[inspection['inspection_clear_radius_m'], .0005],
+            pos=[*inspection['inspection_center_m'][:2], .0005], movable=False,
+            rgba=[.15,.55,.95,.4]))
     return scene
 
 
@@ -217,9 +318,9 @@ def evaluate_outcomes(cfg, trace, assumptions, initial_positions, peak, final_po
         center_accurate = bool(xy_error <= assumptions['destination_xy_tolerance_m'])
         radius = cfg['simulation']['apples'][i]['radius_m']
         box = min(cfg['workcell']['boxes'].values(), key=lambda b: math.dist(
-            expected[:2], [b['origin_m'][j] + b['cell_pitch_m'] * b['grid'][j] / 2 for j in (0, 1)]))
-        center = np.array([box['origin_m'][j] + box['cell_pitch_m'] * box['grid'][j] / 2 for j in (0, 1)])
-        half_size = np.asarray(box['grid']) * box['cell_pitch_m'] / 2
+            expected[:2], [b['origin_m'][j] + b['cell_pitch_m'] * b['grid'][1-j] / 2 for j in (0, 1)]))
+        center = np.array([box['origin_m'][j] + box['cell_pitch_m'] * box['grid'][1-j] / 2 for j in (0, 1)])
+        half_size = np.asarray(box['grid'][::-1]) * box['cell_pitch_m'] / 2
         # Studio bin walls are lower than an apple's center. Check the sphere's
         # actual cross-section at the wall top, not just its center point.
         wall_top = box['origin_m'][2] + box['wall_height_m']

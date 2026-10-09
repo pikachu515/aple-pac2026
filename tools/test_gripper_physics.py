@@ -16,8 +16,10 @@ def main():
     parser.add_argument('--trace', type=Path, default=ROOT/'logs/studio-gripper-physics/planned-trace.json')
     parser.add_argument('--assumptions', type=Path, default=ROOT/'configs/simulation/gripper_physics.yaml')
     parser.add_argument('--report', type=Path, default=ROOT/'logs/gripper-physics/report.json')
+    parser.add_argument('--simulation-config', type=Path, default=ROOT/'configs/simulation/piper.yaml',
+                        help='use the saved virtual-config.yaml for randomized traces')
     args=parser.parse_args()
-    cfg=simulation_config(load_config(), ROOT/'configs/simulation/piper.yaml')
+    cfg=simulation_config(load_config(), args.simulation_config)
     assumptions=load_assumptions(args.assumptions)
     cfg=assumed_config(cfg, assumptions)
     report=run_physics(cfg, json.loads(args.trace.read_text()), assumptions)

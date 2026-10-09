@@ -7,6 +7,7 @@ verified Piper Studio command/IK API. No method in this module opens hardware.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol
@@ -201,6 +202,14 @@ class MotionExecutor:
     def __init__(self, hal: MotionAdapter, cfg: dict) -> None:
         self.hal = hal
         self.cfg = cfg
+        self.stage_timings = {}
+
+    def _timed_call(self, stage, call, *args, **kwargs):
+        started = time.monotonic()
+        try:
+            return call(*args, **kwargs)
+        finally:
+            self.stage_timings[stage] = self.stage_timings.get(stage, 0.0) + time.monotonic()-started
 
     def move_named(self, name: str) -> ExecResult:
         if name not in ("home", "scan"):
@@ -223,6 +232,7 @@ class MotionExecutor:
     def pick_place(self, apple: AppleState, profile: GraspProfile,
                    candidate: GraspCandidate, plan: PlacementPlan,
                    backend: str | None = None) -> ExecResult:
+        self.stage_timings = {}
         execution_cfg = self.cfg["execution"]
         if backend is None:
             backend = execution_cfg.get("default_backend", "scripted")
@@ -253,7 +263,7 @@ class MotionExecutor:
             task_text = ""
             phase_a_timeout = self._positive_timeout("phase_a_s")
 
-        phase_a = self.hal.execute_phase_a(
+        phase_a = self._timed_call('t_pick_s', self.hal.execute_phase_a,
             apple,
             profile,
             candidate,
@@ -279,7 +289,7 @@ class MotionExecutor:
         descent = float(soft["final_descent_m"])
         if not math.isfinite(descent) or descent <= 0:
             raise ValueError("execution.soft_landing.final_descent_m must be finite and positive")
-        phase_b = self.hal.execute_phase_b(
+        phase_b = self._timed_call('t_place_s', self.hal.execute_phase_b,
             apple,
             profile,
             plan,
@@ -309,12 +319,13 @@ class MotionExecutor:
         backend: str | None = None,
     ) -> PickExecutionResult:
         """Pick and lift an apple, returning its measured transform in the TCP frame."""
+        self.stage_timings = {}
         self._validate_pick_match(apple, profile, candidate)
         if not profile.feasible:
             return PickExecutionResult(False, FailureCode.ABORTED, Phase.IDLE)
         targets = build_pick_targets(apple, profile, candidate)
         backend, task_text, timeout_s = self._backend_options(backend)
-        result = self.hal.execute_pick(
+        result = self._timed_call('t_pick_s', self.hal.execute_pick,
             apple,
             profile,
             candidate,
@@ -371,18 +382,19 @@ class MotionExecutor:
         ``view_check`` is called by the adapter right after each capture; a SLIP verdict
         stops the remaining rotations (turning a shifted apple can drop it).
         """
+        self.stage_timings = {}
         if not profile.feasible:
             return InspectionExecutionResult(False, FailureCode.ABORTED, Phase.IDLE, 0)
         views_cfg = self.cfg["inspection"]["views"]
         inspection_plan = build_inspection_plan(
             apple_in_tcp,
-            apple_center_in_base,
+            tuple(views_cfg['center_m']) if views_cfg.get('center_m') is not None else apple_center_in_base,
             tilt_rad=float(views_cfg["tilt_rad"]),
             rotation_angles_rad=views_cfg["rotation_angles_rad"],
             settle_time_s=float(views_cfg["settle_time_s"]),
         )
         extra = {} if view_check is None else {"view_check": view_check}
-        result = self.hal.inspect_views(
+        result = self._timed_call('t_inspect_s', self.hal.inspect_views,
             profile,
             inspection_plan,
             effort=self._checked_effort(profile),
@@ -430,6 +442,7 @@ class MotionExecutor:
         ``speed_scale`` overrides the transit speed (slip recovery runs slowly); it may
         not exceed ``safety.speed_scale_max``. The gripper opens only at the target.
         """
+        self.stage_timings = {}
         self._validate_held_match(apple, profile, plan)
         if not profile.feasible or not plan.feasible:
             return ExecResult(False, FailureCode.ABORTED, Phase.IDLE)
@@ -448,7 +461,7 @@ class MotionExecutor:
             transit_speed = self._bounded_speed("speed_scale", speed_scale)
             if transit_speed > self._speed_scale("speed_scale_max"):
                 raise ValueError("speed_scale must not exceed safety.speed_scale_max")
-        phase_a = self.hal.execute_place_phase_a(
+        phase_a = self._timed_call('t_place_s', self.hal.execute_place_phase_a,
             apple,
             profile,
             plan,
@@ -476,7 +489,7 @@ class MotionExecutor:
         landing_speed = self._bounded_speed("slow_speed_scale", soft["slow_speed_scale"])
         if speed_scale is not None:
             landing_speed = min(landing_speed, transit_speed)
-        phase_b = self.hal.execute_phase_b(
+        phase_b = self._timed_call('t_place_s', self.hal.execute_phase_b,
             apple,
             profile,
             plan,

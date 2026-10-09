@@ -16,6 +16,7 @@ from aple.hal.simulation import simulation_config
 from aple.hal.gripper_physics import load_assumptions, assumed_config, physics_scene, closing_gap, evaluate_outcomes
 from aple.hal.studio_simulation import StudioSimulationReplay
 from aple.hal.piper_studio import PiperWebError
+from aple.hal.random_scene import load_random_settings, randomize_scene
 from tools.run_cycle import main as run_cycle
 
 
@@ -24,12 +25,31 @@ def main(argv=None):
     parser.add_argument('--url', default='http://127.0.0.1')
     parser.add_argument('--assumptions', type=Path, default=ROOT/'configs/simulation/gripper_physics.yaml')
     parser.add_argument('--output', type=Path, default=ROOT/'logs/studio-gripper-physics')
+    parser.add_argument('--randomize', action='store_true', help='randomize apples and grade bins before planning')
+    parser.add_argument('--seed', type=int, help='reproduce a random layout; requires --randomize')
+    parser.add_argument('--random-config', type=Path, default=ROOT/'configs/simulation/random_scene.yaml')
+    parser.add_argument('--plan-only', action='store_true', help='save layout and validate the cycle without contacting Studio')
     args = parser.parse_args(argv)
+    if args.seed is not None and not args.randomize:
+        parser.error('--seed requires --randomize')
     a = load_assumptions(args.assumptions)
     cfg = assumed_config(simulation_config(load_config(), ROOT/'configs/simulation/piper.yaml'), a)
+    if args.randomize:
+        cfg = randomize_scene(cfg, load_random_settings(args.random_config), seed=args.seed)
+        print(f'무작위 배치 seed={cfg["simulation"]["random_scene"]["seed"]}', flush=True)
+        base = args.output / f'seed-{cfg["simulation"]["random_scene"]["seed"]}'
+        args.output = base
+        number = 2
+        while args.output.exists():
+            args.output = base.with_name(f'{base.name}-{number}')
+            number += 1
     args.output.mkdir(parents=True, exist_ok=True)
     overlay = args.output/'virtual-config.yaml'
     overlay.write_text(yaml.safe_dump(cfg), encoding='utf-8')
+    layout = dict(randomization=cfg['simulation'].get('random_scene'),
+                  apples=cfg['simulation']['apples'], boxes=cfg['workcell']['boxes'])
+    (args.output/'layout.json').write_text(json.dumps(layout, indent=2), encoding='utf-8')
+    print(f'배치·실행 로그: {args.output}', flush=True)
     trace_path = args.output/'planned-trace.json'
     rows = run_cycle(['--simulate', '--simulation-config', str(overlay), '--trace', str(trace_path)])
     trace = json.loads(trace_path.read_text())
@@ -38,6 +58,9 @@ def main(argv=None):
     if (len(rows) != count or not all(row.success for row in rows)
             or len(trace['apples']) != count or sorted(releases) != list(range(count))):
         raise ValueError('Planning did not complete all apples; refusing Studio motion')
+    if args.plan_only:
+        print(f'계획 검증 완료. 배치: {args.output / "layout.json"}', flush=True)
+        return 0
     sim = StudioSimulationReplay(cfg, base_url=args.url)
     digest = hashlib.sha256(json.dumps(a, sort_keys=True).encode()).hexdigest()
 
@@ -66,7 +89,7 @@ def main(argv=None):
             gap = closing_gap(event['width_m'], grasp=close_next, assumptions=a)
             targets.append(({'gripper': sim.client._normalize_gripper_width(gap)}, close_next))
             close_next = False
-    report = dict(mode='studio_assumed_gripper_contact_physics', assumptions=a,
+    report = dict(mode='studio_assumed_gripper_contact_physics', assumptions=a, layout=layout,
                   goals_reached=0, success=False, transport_errors=[])
     print(f'물리 파지 시험: {args.url}/scene — 가상 팔만 움직입니다.', flush=True)
     try:

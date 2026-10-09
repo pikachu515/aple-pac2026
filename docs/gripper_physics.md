@@ -35,6 +35,49 @@ cd /mnt/extra/aple-pac2026
 
 ## 다른 세션에서 가정 모델 시작하기
 
+### 사과와 상자를 매번 무작위로 배치
+
+가정 simd가 실행 중이면 아래 명령을 사용한다. 시드를 생략하면 매번 새 배치를 만든다.
+
+```bash
+~/.venvs/piper-daemons/bin/python3 tools/run_studio_gripper_physics.py --randomize
+# 동일한 배치를 재시험
+~/.venvs/piper-daemons/bin/python3 tools/run_studio_gripper_physics.py --randomize --seed 42
+# Studio 접속·팔 이동 없이 배치와 전체 경로만 검증
+~/.venvs/piper-daemons/bin/python3 tools/run_studio_gripper_physics.py --randomize --seed 42 --plan-only
+```
+
+`configs/simulation/random_scene.yaml`의 제한된 XY 영역에서 사과·상자를 독립적으로
+샘플링한다. 등급 상자의 순서도 고정하지 않는다. 사과 간 간격, 상자끼리 및 사과와 상자의
+겹침, 트레이·작업영역 경계를 검사하며 시도 횟수에 상한을 둔다. 임의의 작업공간 전체에서
+도달이나 파지를 보증하는 기능은 아니다. 설정 범위를 늘리면 IK/파지/물리 접촉을 다시 검증한다.
+
+새 좌표로 전체 인식·판정·계획·IK를 다시 실행하고 모두 계획 완료한 경우에만 Studio로
+명령을 보낸다. 계획 실패나 접촉 실패를 성공으로 바꾸거나 고정 배치로 되돌리지 않는다.
+시드와 샘플링 조건은 `layout.json`, 실제 사용 설정은 `virtual-config.yaml`, 경로는
+`planned-trace.json`, 물리 결과는 `report.json`에 저장한다. 무작위 실행마다
+`logs/studio-gripper-physics/seed-<숫자>[-반복번호]/`를 만들어 이전 결과를 보존한다.
+
+이 가상 시험은 카메라 접선 방향으로 합성 색 패턴을 배치해 위치 변화만으로 등급별
+한 칸 상자의 용량이 부족해지는 현상을 줄인다. 실제 색 판정은 변경하지 않는다.
+사전 개방 폭은 시뮬레이션 전용 `pregrasp_contact_gap_m`으로 지정하며 현재 0.098 m이다.
+물리 부품의 TCP·마찰·힘·모델 해시는 그대로 사용하고 실물 설정에는 기록하지 않는다.
+
+10/8 확인: 시드 42의 Studio 접촉 시험에서 총 238개 목표에 도달했고 사과 3개 모두
+새 목표 상자에 안착했다. 중심 오차는 약 0.6 / 0.9 / 0.6 mm였다. 시드 7의 전체 계획도
+통과했으며, 20개 시드의 배치 간격 검사와 관련 테스트 31개가 통과했다.
+가정 모델·제한된 범위에서의 확인이며 전체 무작위 배치의 성공률 보증은 아니다.
+
+무작위 trace의 오프라인 물리 시험은 해당 배치의 설정도 함께 지정해야 한다.
+
+```bash
+~/.venvs/piper-daemons/bin/python3 tools/test_gripper_physics.py \
+  --trace logs/studio-gripper-physics/seed-42/planned-trace.json \
+  --simulation-config logs/studio-gripper-physics/seed-42/virtual-config.yaml
+```
+
+### 임시 서비스 시작·복원
+
 Studio 설치의 simd·MuJoCo 패키지를 가진 Python 환경을 사용한다.
 현재 PC에서는 아래 명령을 쓴다. 조그·텔레옵·학습 등 Studio 작업이 끝난 상태에서 실행한다.
 
@@ -116,3 +159,9 @@ Studio는 실제 시간의 조그 필터·도달 대기를 거치므로 오프�
 ~/.venvs/piper-daemons/bin/python3 tools/test_gripper_physics.py \
   --trace logs/studio-gripper-physics/planned-trace.json
 ```
+
+## 중앙 회전 검사와 큰 사과를 사용하는 새 가상 실행기
+
+사과별 252/297.1/337g 질량과 82.6/87.3/91.9mm 지름, 넓게 섞인 배치, 중앙 회전·RGB-D
+재판정, 빈손/파지 속도 분리는 [중앙 검사 시뮬레이션](in_hand_simulation.md)을 사용한다.
+기존 Studio 웹 시험 명령은 기존 모드이고, 새 모드는 별도 MuJoCo 실행기로 제공한다.

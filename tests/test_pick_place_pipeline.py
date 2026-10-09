@@ -85,6 +85,7 @@ def grasp_candidate(apple_id=1, *, scene_id=7, collision_free=True):
 @pytest.fixture
 def cfg():
     config = load_config()
+    config['piper_web']['gripper_width_range_m'] = [.02, .12]
     config["safety"]["gripper_effort_max"] = 1000
     config["size_bins"]["force"]["mu"] = 0.5
     config["size_bins"]["force"]["f_bruise_n"] = 30.0
@@ -439,10 +440,11 @@ def test_execute_scene_passes_candidate_contract_to_motion_adapter(cfg):
 
 
 def test_pipeline_keeps_cell_reservations_until_explicit_release(cfg):
-    pipeline = PickPlacePipeline(cfg)
+    pipeline = PickPlacePipeline(cfg, RecordingMotionAdapter())
     first_plan = pipeline.plan_scene(
         [apple()], [grade()], [box()], [grasp_candidate()]
     )
+    pipeline.execute_item(first_plan.items[0])
     second_plan = pipeline.plan_scene(
         [apple(2)], [grade(2)], [box()], [grasp_candidate(2)]
     )

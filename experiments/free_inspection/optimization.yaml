@@ -1,0 +1,14 @@
+# Offline-only up/down inspection candidate. All lengths use meters.
+optimization:
+  choose_transfer_route: true
+  native_slip_fk: true
+  exact_final_descent: true
+  inspection_physics_settle_s: 0.06
+  empty_joint_velocity_rad_s: 1.5
+  landing_speed_scale: 0.2
+  inspection_rotation_mode: vertical_pitch
+  # TCP pitch 140 -> 123.3 -> 106.7 -> 90 degrees at the fixed apple center.
+  vertical_angles_rad: [0.872664626, 0.581776417, 0.290888209, 0.0]
+  # Assumed opaque disks for rendering/occlusion, NOT inferred photo diameters.
+  # Contact physics remains the existing pad/shaft approximation.
+  opaque_cup_radius_m: 0.040
